@@ -477,7 +477,7 @@ func TestInjectUUIDs_TagsAllMediaParts(t *testing.T) {
 			{Index: 3, Modality: ModalityAudio, Hash: "H-input-audio"},
 		},
 	}
-	step.injectUUIDs(reqCtx)
+	step.injectUUIDs(context.Background(), reqCtx)
 
 	if got := imagePart["uuid"]; got != "H-img" {
 		t.Errorf("image uuid = %v, want H-img", got)
@@ -514,7 +514,7 @@ func TestInjectUUIDs_TagsRepeatedModalityInOrder(t *testing.T) {
 			{Index: 1, Modality: ModalityAudio, Hash: "H1"},
 		},
 	}
-	step.injectUUIDs(reqCtx)
+	step.injectUUIDs(context.Background(), reqCtx)
 	if got := aud0["uuid"]; got != "H0" {
 		t.Errorf("audio[0] uuid = %v, want H0", got)
 	}
@@ -549,7 +549,7 @@ func TestInjectUUIDs_SkipsMalformedParts(t *testing.T) {
 			{Index: 1, Modality: ModalityAudio, Hash: "H-aud"},
 		},
 	}
-	step.injectUUIDs(reqCtx)
+	step.injectUUIDs(context.Background(), reqCtx)
 
 	if _, tagged := malformedImg["uuid"]; tagged {
 		t.Errorf("malformed image_url must not be tagged: %+v", malformedImg)

@@ -98,7 +98,7 @@ func (s *DecodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 // sequentially; if it ever goes concurrent, decode must copy like the others.
 func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.RequestContext) {
 	kvParams := s.kv.PrepareDecodeKVParams(ctx, reqCtx)
-	s.injectUUIDs(reqCtx)
+	s.injectUUIDs(ctx, reqCtx)
 
 	format := resolveFormat(s.useOpenAIFormat, reqCtx.OriginalPath)
 	switch format {
@@ -139,11 +139,13 @@ func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext) {
 // MultimodalEntry that shares its modality and local index, the same
 // invariant the encode fanout uses. Non-media parts (text, tool_use,
 // unknown types) are skipped.
-func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext) {
+func (s *DecodeStep) injectUUIDs(ctx context.Context, reqCtx *pipeline.RequestContext) {
 	messages, ok := reqCtx.Body["messages"].([]any)
 	if !ok {
 		return
 	}
+
+	logger := log.FromContext(ctx).WithName(DecodeStepName)
 
 	// Group hashes by modality, preserving entry order. Later, the walker
 	// indexes into hashesByMod[modality] at the per-modality position for
@@ -184,9 +186,22 @@ func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext) {
 			}
 			localIdx := modCounter[modality]
 			modCounter[modality]++
-			if hashes := hashesByMod[modality]; localIdx < len(hashes) {
+			hashes := hashesByMod[modality]
+			if localIdx < len(hashes) {
 				partMap["uuid"] = hashes[localIdx]
+				continue
 			}
+			// Coordinator invariant: replace_media_urls appends one
+			// MultimodalEntry per well-formed media part in walker order,
+			// and this walker uses the same predicate, so a miss means
+			// the invariant broke somewhere upstream. The part still goes
+			// to the backend, just without its cache-key uuid, so a miss
+			// costs a cache lookup rather than the request. Log at DEBUG
+			// so the divergence is observable when someone goes looking.
+			logger.V(logutil.DEBUG).Info("no MultimodalEntry for well-formed media part",
+				"modality", modality,
+				"local_index", localIdx,
+				"modality_entry_count", len(hashes))
 		}
 	}
 }
