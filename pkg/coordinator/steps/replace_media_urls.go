@@ -522,14 +522,18 @@ var defaultAllowedContentTypesByModality = map[string]map[string]struct{}{
 }
 
 // allowedContentTypeForModality reports whether contentType is allowed for
-// modality per the step's configured allowlist. Comparison is
-// case-insensitive with whitespace trimmed.
+// modality per the step's configured allowlist. MIME parameters
+// (";codecs=…", ";charset=…") are stripped before comparison, so a real
+// origin returning e.g. `video/mp4; codecs="avc1.4D401E"` matches the
+// bare `video/mp4` entry. Comparison is case-insensitive with whitespace
+// trimmed.
 func (s *ReplaceMediaURLsStep) allowedContentTypeForModality(contentType, modality string) bool {
 	allowed, ok := s.allowedContentTypes[modality]
 	if !ok {
 		return false
 	}
-	_, ok = allowed[strings.ToLower(strings.TrimSpace(contentType))]
+	media, _, _ := strings.Cut(contentType, ";")
+	_, ok = allowed[strings.ToLower(strings.TrimSpace(media))]
 	return ok
 }
 

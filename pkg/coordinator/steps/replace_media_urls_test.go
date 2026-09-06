@@ -1196,6 +1196,55 @@ func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams asserts
+// that a real audio_url / video_url whose origin returns a Content-Type
+// with MIME parameters (";codecs=…", ";charset=…") is accepted. Real
+// origins routinely emit these; the allowlist matches on the media-type
+// portion only, not the raw header value.
+func TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		partType    string
+		urlKey      string
+		contentType string
+	}{
+		{"audio with charset", "audio_url", "audio_url", "audio/wav; charset=US-ASCII"},
+		{"video with codecs", "video_url", "video_url", `video/mp4; codecs="avc1.4D401E,mp4a.40.2"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ct := tc.contentType
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", ct)
+				_, _ = w.Write([]byte("bytes"))
+			}))
+			defer server.Close()
+
+			step := newLoopbackStep(t, map[string]any{"download_timeout": "5s"})
+			reqCtx := &pipeline.RequestContext{
+				Body: map[string]any{
+					"messages": []any{
+						map[string]any{
+							"role": "user",
+							"content": []any{
+								map[string]any{
+									"type":     tc.partType,
+									tc.urlKey: map[string]any{"url": server.URL + "/clip"},
+								},
+							},
+						},
+					},
+				},
+			}
+			if err := step.Execute(context.Background(), reqCtx); err != nil {
+				t.Fatalf("expected accepted Content-Type %q, got %v", tc.contentType, err)
+			}
+			if got := len(reqCtx.MultimodalEntries); got != 1 {
+				t.Fatalf("expected 1 entry, got %d", got)
+			}
+		})
+	}
+}
+
 // TestReplaceMediaURLsStep_AudioURL_RejectsUnexpectedContentType asserts an
 // audio_url whose origin serves a non-audio Content-Type (e.g. text/html)
 // is rejected as ErrBadRequest. This closes an SSRF-style widening where
