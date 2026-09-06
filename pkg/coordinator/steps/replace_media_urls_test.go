@@ -32,6 +32,15 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/coordinator/pipeline"
 )
 
+// MIME literals reused across tests. Extracted so goconst does not flag
+// their repetition and so a rename or typo lands in one place.
+const (
+	testAudioWAVMIME  = "audio/wav"
+	testImagePNGMIME  = "image/png"
+	testImageJPEGMIME = "image/jpeg"
+	testVideoMP4MIME  = "video/mp4"
+)
+
 // newLoopbackStep builds a step whose SSRF guard permits loopback. httptest
 // servers bind to 127.0.0.1, which the guard blocks by default, so download
 // tests that talk to a local server must opt loopback back in.
@@ -48,7 +57,7 @@ func newLoopbackStep(t *testing.T, params map[string]any) *ReplaceMediaURLsStep 
 
 func TestReplaceMediaURLsStep_DownloadsAndInlines(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Content-Type", testImageJPEGMIME)
 		_, _ = w.Write([]byte("jpeg-bytes"))
 	}))
 	defer imageServer.Close()
@@ -80,7 +89,7 @@ func TestReplaceMediaURLsStep_DownloadsAndInlines(t *testing.T) {
 	if len(reqCtx.MultimodalEntries) != 1 {
 		t.Fatalf("expected 1 multimodal entry, got %d", len(reqCtx.MultimodalEntries))
 	}
-	if reqCtx.MultimodalEntries[0].ContentType != "image/jpeg" {
+	if reqCtx.MultimodalEntries[0].ContentType != testImageJPEGMIME {
 		t.Fatalf("expected content type image/jpeg, got %s", reqCtx.MultimodalEntries[0].ContentType)
 	}
 	if reqCtx.MultimodalEntries[0].Base64Data == "" {
@@ -185,7 +194,7 @@ func TestReplaceMediaURLsStep_DataURIInput(t *testing.T) {
 		t.Fatalf("expected 1 multimodal entry, got %d", len(reqCtx.MultimodalEntries))
 	}
 	got := reqCtx.MultimodalEntries[0]
-	if got.ContentType != "image/jpeg" {
+	if got.ContentType != testImageJPEGMIME {
 		t.Fatalf("expected content type image/jpeg, got %s", got.ContentType)
 	}
 	if got.Base64Data != "/9j/4AAQSkZJRg==" {
@@ -207,7 +216,7 @@ func TestReplaceMediaURLsStep_DataURIInput(t *testing.T) {
 // in both source orderings.
 func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		_, _ = w.Write([]byte("downloaded-image-bytes"))
 	}))
 	defer imageServer.Close()
@@ -231,16 +240,16 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 			name:  "http then data",
 			parts: []any{httpPart, dataPart},
 			want: []want{
-				{contentType: "image/png", base64Data: base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))},
-				{contentType: "image/jpeg", base64Data: "SU5MSU5F"},
+				{contentType: testImagePNGMIME, base64Data: base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))},
+				{contentType: testImageJPEGMIME, base64Data: "SU5MSU5F"},
 			},
 		},
 		{
 			name:  "data then http",
 			parts: []any{dataPart, httpPart},
 			want: []want{
-				{contentType: "image/jpeg", base64Data: "SU5MSU5F"},
-				{contentType: "image/png", base64Data: base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))},
+				{contentType: testImageJPEGMIME, base64Data: "SU5MSU5F"},
+				{contentType: testImagePNGMIME, base64Data: base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))},
 			},
 		},
 	}
@@ -289,13 +298,13 @@ func TestParseDataURI(t *testing.T) {
 		{
 			name:        "jpeg base64",
 			uri:         "data:image/jpeg;base64,/9j/4AAQ",
-			wantType:    "image/jpeg",
+			wantType:    testImageJPEGMIME,
 			wantPayload: "/9j/4AAQ",
 		},
 		{
 			name:        "png base64",
 			uri:         "data:image/png;base64,iVBORw0K",
-			wantType:    "image/png",
+			wantType:    testImagePNGMIME,
 			wantPayload: "iVBORw0K",
 		},
 		{
@@ -306,7 +315,7 @@ func TestParseDataURI(t *testing.T) {
 		{
 			name:        "content type normalized to lowercase and trimmed",
 			uri:         "data:IMAGE/PNG ;base64,iVBORw0K",
-			wantType:    "image/png",
+			wantType:    testImagePNGMIME,
 			wantPayload: "iVBORw0K",
 		},
 		{
@@ -351,7 +360,7 @@ func TestReplaceMediaURLsStep_RejectsTooManyEntries(t *testing.T) {
 	var hits atomic.Int32
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		_, _ = w.Write([]byte("png-data"))
 	}))
 	defer imageServer.Close()
@@ -403,7 +412,7 @@ func TestReplaceMediaURLsStep_RejectsNegativeMaxEntries(t *testing.T) {
 
 func TestReplaceMediaURLsStep_AllowsAtLimit(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		_, _ = w.Write([]byte("png-data"))
 	}))
 	defer imageServer.Close()
@@ -434,7 +443,7 @@ func TestReplaceMediaURLsStep_AllowsAtLimit(t *testing.T) {
 
 func TestReplaceMediaURLsStep_MultipleImages(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		_, _ = w.Write([]byte("png-data"))
 	}))
 	defer imageServer.Close()
@@ -687,7 +696,7 @@ func TestReplaceMediaURLsStep_RejectsOversizedBody(t *testing.T) {
 	var hits atomic.Int32
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		// No Content-Length set: force the size check to happen during the read.
 		w.(http.Flusher).Flush()
 		_, _ = w.Write(make([]byte, config.BytesPerMB+1))
@@ -723,7 +732,7 @@ func TestReplaceMediaURLsStep_RejectsOversizedBody(t *testing.T) {
 
 func TestReplaceMediaURLsStep_RejectsOversizedContentLength(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		w.Header().Set("Content-Length", "1048577") // config.BytesPerMB + 1
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(make([]byte, config.BytesPerMB+1))
@@ -745,7 +754,7 @@ func TestReplaceMediaURLsStep_AllowsBodyAtCap(t *testing.T) {
 	const capMB = 1
 	const capBytes = capMB * config.BytesPerMB
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		_, _ = w.Write(make([]byte, capBytes))
 	}))
 	defer imageServer.Close()
@@ -780,7 +789,7 @@ func TestReplaceMediaURLsStep_AllowsBodyAtCap(t *testing.T) {
 // request even when the others are within the cap.
 func TestReplaceMediaURLsStep_RejectsOneOversizedAmongMany(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		if strings.HasPrefix(r.URL.Path, "/big") {
 			_, _ = w.Write(make([]byte, config.BytesPerMB+1))
 			return
@@ -1002,7 +1011,7 @@ func TestReplaceMediaURLsStep_BlocksHostnameResolvingToPrivate(t *testing.T) {
 // rejected before any connection.
 func TestReplaceMediaURLsStep_DomainAllowlist(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Type", testImagePNGMIME)
 		_, _ = w.Write([]byte("img"))
 	}))
 	defer server.Close()
@@ -1145,7 +1154,7 @@ func TestReplaceMediaURLsStep_CancelledContextSkipsDataURIParse(t *testing.T) {
 // added to MultimodalEntries as one audio entry.
 func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 	audioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Content-Type", testAudioWAVMIME)
 		_, _ = w.Write([]byte("wav-bytes"))
 	}))
 	defer audioServer.Close()
@@ -1176,7 +1185,7 @@ func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 	if reqCtx.MultimodalEntries[0].Modality != ModalityAudio {
 		t.Fatalf("expected Modality=%q, got %q", ModalityAudio, reqCtx.MultimodalEntries[0].Modality)
 	}
-	if reqCtx.MultimodalEntries[0].ContentType != "audio/wav" {
+	if reqCtx.MultimodalEntries[0].ContentType != testAudioWAVMIME {
 		t.Fatalf("expected content type audio/wav, got %s", reqCtx.MultimodalEntries[0].ContentType)
 	}
 	msgs := reqCtx.Body["messages"].([]any)
@@ -1294,7 +1303,7 @@ func TestReplaceMediaURLsStep_ImageURL_PermissiveContentType(t *testing.T) {
 // video_url with a video/mp4 payload.
 func TestReplaceMediaURLsStep_VideoURL_Downloads(t *testing.T) {
 	videoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Type", testVideoMP4MIME)
 		_, _ = w.Write([]byte("mp4-bytes"))
 	}))
 	defer videoServer.Close()
@@ -1430,7 +1439,7 @@ func TestReplaceMediaURLsStep_InputAudio_Valid(t *testing.T) {
 	if entry.Modality != ModalityAudio {
 		t.Fatalf("expected Modality=%q, got %q", ModalityAudio, entry.Modality)
 	}
-	if entry.ContentType != "audio/wav" {
+	if entry.ContentType != testAudioWAVMIME {
 		t.Fatalf("expected content type audio/wav, got %s", entry.ContentType)
 	}
 	if entry.Base64Data != "UklGRg==" {
@@ -1598,13 +1607,13 @@ func TestReplaceMediaURLsStep_MixedImageAudioVideo(t *testing.T) {
 	mediaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, ".jpg"):
-			w.Header().Set("Content-Type", "image/jpeg")
+			w.Header().Set("Content-Type", testImageJPEGMIME)
 			_, _ = w.Write([]byte("jpg-bytes"))
 		case strings.HasSuffix(r.URL.Path, ".wav"):
-			w.Header().Set("Content-Type", "audio/wav")
+			w.Header().Set("Content-Type", testAudioWAVMIME)
 			_, _ = w.Write([]byte("wav-bytes"))
 		case strings.HasSuffix(r.URL.Path, ".mp4"):
-			w.Header().Set("Content-Type", "video/mp4")
+			w.Header().Set("Content-Type", testVideoMP4MIME)
 			_, _ = w.Write([]byte("mp4-bytes"))
 		default:
 			http.NotFound(w, r)
@@ -1669,7 +1678,7 @@ func TestReplaceMediaURLsStep_MixedImageAudioVideo(t *testing.T) {
 // then pair each audio entry with the wrong content part.
 func TestReplaceMediaURLsStep_MixedAudio_WalkerOrder(t *testing.T) {
 	audioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Content-Type", testAudioWAVMIME)
 		_, _ = w.Write([]byte("bytes-of-B"))
 	}))
 	defer audioServer.Close()
@@ -1706,7 +1715,7 @@ func TestReplaceMediaURLsStep_MixedAudio_WalkerOrder(t *testing.T) {
 		t.Errorf("entries[0].Base64Data = %q, want the inline payload %q",
 			reqCtx.MultimodalEntries[0].Base64Data, inlineData)
 	}
-	if reqCtx.MultimodalEntries[0].ContentType != "audio/wav" {
+	if reqCtx.MultimodalEntries[0].ContentType != testAudioWAVMIME {
 		t.Errorf("entries[0].ContentType = %q, want audio/wav (from input_audio format)",
 			reqCtx.MultimodalEntries[0].ContentType)
 	}
@@ -1777,7 +1786,7 @@ func TestReplaceMediaURLsStep_MaxVideoDownloadSize_OverridesGlobal(t *testing.T)
 	// 2 MB video payload.
 	payload := make([]byte, 2*1024*1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Type", testVideoMP4MIME)
 		_, _ = w.Write(payload)
 	}))
 	defer server.Close()
@@ -1818,7 +1827,7 @@ func TestReplaceMediaURLsStep_MaxVideoDownloadSize_OverridesGlobal(t *testing.T)
 func TestReplaceMediaURLsStep_MaxAudioDownloadSize_FallsBackToGlobal(t *testing.T) {
 	payload := make([]byte, 2*1024*1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Content-Type", testAudioWAVMIME)
 		_, _ = w.Write(payload)
 	}))
 	defer server.Close()
@@ -1891,7 +1900,7 @@ func TestReplaceMediaURLsStep_RejectsInvalidPerModalityCap(t *testing.T) {
 // passes and (b) audio/mpeg, allowed by the default set, is now rejected.
 func TestReplaceMediaURLsStep_AllowedAudioContentTypes_Overrides(t *testing.T) {
 	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{
-		"allowed_audio_content_types": []any{"audio/wav"},
+		"allowed_audio_content_types": []any{testAudioWAVMIME},
 	})
 
 	accept := &pipeline.RequestContext{Body: map[string]any{
@@ -1923,7 +1932,7 @@ func TestReplaceMediaURLsStep_AllowedAudioContentTypes_Overrides(t *testing.T) {
 // default-allowed image/jpeg.
 func TestReplaceMediaURLsStep_AllowedImageContentTypes_Overrides(t *testing.T) {
 	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{
-		"allowed_image_content_types": []any{"image/png"},
+		"allowed_image_content_types": []any{testImagePNGMIME},
 	})
 	reject := &pipeline.RequestContext{Body: map[string]any{
 		"messages": []any{
@@ -1961,7 +1970,7 @@ func TestReplaceMediaURLsStep_AllowedContentTypes_DefaultsWhenUnset(t *testing.T
 // downgrade, an operator's intent to lock down the allowlist is lost.
 func TestReplaceMediaURLsStep_RejectsNonStringAllowedContentType(t *testing.T) {
 	_, err := NewReplaceMediaURLsStep(nil, map[string]any{
-		"allowed_audio_content_types": []any{"audio/wav", 42},
+		"allowed_audio_content_types": []any{testAudioWAVMIME, 42},
 	})
 	if err == nil {
 		t.Fatal("expected construction error for non-string allowlist entry")
@@ -1972,7 +1981,7 @@ func TestReplaceMediaURLsStep_RejectsNonStringAllowedContentType(t *testing.T) {
 // construction when a per-modality allowlist is set to a non-list value.
 func TestReplaceMediaURLsStep_RejectsNonListAllowedContentTypes(t *testing.T) {
 	_, err := NewReplaceMediaURLsStep(nil, map[string]any{
-		"allowed_video_content_types": "video/mp4",
+		"allowed_video_content_types": testVideoMP4MIME,
 	})
 	if err == nil {
 		t.Fatal("expected construction error for non-list allowlist value")
