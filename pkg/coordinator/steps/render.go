@@ -272,14 +272,14 @@ func (s *RenderStep) executeChatCompletions(ctx context.Context, reqCtx *pipelin
 
 	// Length check: sum of per-modality slice lengths must match len(entries).
 	totalHashes, totalPlaceholders, totalKwargs := 0, 0, 0
-	for _, s := range renderResp.Features.MMHashes {
-		totalHashes += len(s)
+	for _, hashes := range renderResp.Features.MMHashes {
+		totalHashes += len(hashes)
 	}
-	for _, s := range renderResp.Features.MMPlaceholders {
-		totalPlaceholders += len(s)
+	for _, placeholders := range renderResp.Features.MMPlaceholders {
+		totalPlaceholders += len(placeholders)
 	}
-	for _, s := range renderResp.Features.KwargsData {
-		totalKwargs += len(s)
+	for _, kwargs := range renderResp.Features.KwargsData {
+		totalKwargs += len(kwargs)
 	}
 	expected := len(reqCtx.MultimodalEntries)
 	if totalHashes != expected {
