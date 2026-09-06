@@ -551,6 +551,65 @@ func TestRenderStep_GenerateFormat_MultipleImages(t *testing.T) {
 	}
 }
 
+// TestRenderStep_GenerateFormat_MultipleModalities exercises the
+// generate path with mm features carrying image, audio, and video
+// entries in one request. The render step walks modalities in
+// alphabetical order (audio, image, video) so MultimodalEntries comes
+// back tagged with the right modality per slot and each entry's Hash /
+// KwargsData / Placeholder pair through cleanly.
+func TestRenderStep_GenerateFormat_MultipleModalities(t *testing.T) {
+	step, err := NewRenderStep(nil, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := &pipeline.RequestContext{
+		OriginalPath: gateway.DefaultGeneratePath,
+		Body: map[string]any{
+			"model": "test-model",
+			// 10 tokens, three non-overlapping placeholder spans below.
+			"token_ids": []any{
+				float64(1), float64(51000), float64(51000),
+				float64(3), float64(32000), float64(32000), float64(32000),
+				float64(4), float64(71000), float64(71000),
+			},
+			"features": map[string]any{
+				"mm_hashes": map[string]any{
+					"audio": []any{"aud-hash"},
+					"image": []any{"img-hash"},
+					"video": []any{"vid-hash"},
+				},
+				"mm_placeholders": map[string]any{
+					"audio": []any{map[string]any{"offset": float64(1), "length": float64(2)}},
+					"image": []any{map[string]any{"offset": float64(4), "length": float64(3)}},
+					"video": []any{map[string]any{"offset": float64(8), "length": float64(2)}},
+				},
+				"kwargs_data": map[string]any{
+					"audio": []any{"YXVkaW8="},
+					"image": []any{"aW1hZ2U="},
+					"video": []any{"dmlkZW8="},
+				},
+			},
+		},
+	}
+
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(reqCtx.MultimodalEntries) != 3 {
+		t.Fatalf("expected 3 multimodal entries, got %d", len(reqCtx.MultimodalEntries))
+	}
+	want := []pipeline.MultimodalEntry{
+		{Index: 0, Modality: ModalityAudio, Hash: "aud-hash", KwargsData: "YXVkaW8=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
+		{Index: 1, Modality: ModalityImage, Hash: "img-hash", KwargsData: "aW1hZ2U=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
+		{Index: 2, Modality: ModalityVideo, Hash: "vid-hash", KwargsData: "dmlkZW8=", Placeholder: pipeline.PlaceholderRange{Offset: 8, Length: 2}},
+	}
+	for i, w := range want {
+		if reqCtx.MultimodalEntries[i] != w {
+			t.Errorf("entry %d: expected %+v, got %+v", i, w, reqCtx.MultimodalEntries[i])
+		}
+	}
+}
+
 func TestRenderStep_GenerateFormat_MalformedFeatures(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

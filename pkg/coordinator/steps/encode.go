@@ -91,9 +91,10 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 
 	logger := log.FromContext(ctx).WithName(EncodeStepName)
 
-	// On the generate path the prefill worker runs the vision encoder inline from
-	// kwargs_data, so the encode fan-out and EC handoff are redundant. Skipping it
-	// avoids shipping the oversized preprocessed pixel tensor a second time
+	// On the generate path the prefill worker runs the encoder inline from
+	// kwargs_data (image pixel tensors, audio spectrograms, video frames all
+	// take this path), so the encode fanout and EC handoff would be redundant.
+	// Skipping avoids shipping the preprocessed tensor a second time
 	// (see https://github.com/vllm-project/vllm/issues/46722).
 	if reqCtx.OriginalPath == gateway.DefaultGeneratePath {
 		logger.V(logutil.DEFAULT).Info("skipping encode for generate request")
