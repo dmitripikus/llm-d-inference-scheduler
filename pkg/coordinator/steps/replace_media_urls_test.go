@@ -1227,7 +1227,7 @@ func TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams(t *testing
 							"role": "user",
 							"content": []any{
 								map[string]any{
-									"type":     tc.partType,
+									"type":    tc.partType,
 									tc.urlKey: map[string]any{"url": server.URL + "/clip"},
 								},
 							},
