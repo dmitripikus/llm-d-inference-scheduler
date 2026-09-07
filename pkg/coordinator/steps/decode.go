@@ -137,18 +137,17 @@ func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext, logger l
 }
 
 // injectUUIDs tags each media content part with the uuid the decode
-// backend uses for prefix-cache keying. Each part is paired with the
-// MultimodalEntry that shares its modality and local index, the same
-// invariant the encode fanout uses. Non-media parts (text, tool_use,
-// unknown types) are skipped.
+// backend uses for prefix-cache keying. See mediaPartIsWellFormed for
+// how each part is matched with its MultimodalEntry. Non-media parts
+// (text, tool_use, unknown types) are skipped.
 func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext, logger logr.Logger) {
 	messages, ok := reqCtx.Body["messages"].([]any)
 	if !ok {
 		return
 	}
 
-	// Group hashes by modality, preserving entry order. Later, the walker
-	// indexes into hashesByMod[modality] at the per-modality position for
+	// Group hashes by modality in entry order so the walker below can
+	// index into hashesByMod[modality] at the per-modality position for
 	// O(1) lookup per part. Build is O(n).
 	hashesByMod := make(map[string][]string)
 	for _, entry := range reqCtx.MultimodalEntries {
@@ -156,8 +155,6 @@ func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext, logger logr.Lo
 		hashesByMod[mod] = append(hashesByMod[mod], entry.Hash)
 	}
 
-	// Walk parts, incrementing a per-modality counter so each media part
-	// gets the hash of the entry at the matching (modality, localIndex).
 	modCounter := make(map[string]int)
 	for _, msg := range messages {
 		msgMap, ok := msg.(map[string]any)
@@ -178,9 +175,7 @@ func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext, logger logr.Lo
 			if !isMedia {
 				continue
 			}
-			// Same predicate replace_media_urls uses; a malformed part
-			// it silently dropped must not shift the per-modality
-			// counter here or the wrong entry's Hash would be attached.
+			// Same predicate as replace_media_urls (see mediaPartIsWellFormed).
 			if !mediaPartIsWellFormed(partMap, partType) {
 				continue
 			}
@@ -191,13 +186,11 @@ func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext, logger logr.Lo
 				partMap["uuid"] = hashes[localIdx]
 				continue
 			}
-			// Coordinator invariant: replace_media_urls appends one
-			// MultimodalEntry per well-formed media part in walker order,
-			// and this walker uses the same predicate, so a miss means
-			// the invariant broke somewhere upstream. The part still goes
-			// to the backend, just without its cache-key uuid, so a miss
-			// costs a cache lookup rather than the request. Log at DEBUG
-			// so the divergence is observable when someone goes looking.
+			// A miss means entries and parts got out of line upstream
+			// (see mediaPartIsWellFormed). The part still goes to the
+			// backend without its uuid, so this costs a cache lookup
+			// rather than the request. Log at DEBUG so the mismatch is
+			// visible when someone looks.
 			logger.V(logutil.DEBUG).Info("no MultimodalEntry for well-formed media part",
 				"modality", modality,
 				"local_index", localIdx,

@@ -113,8 +113,9 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 		partsByMod = collectMediaParts(reqCtx.Body)
 	}
 
-	// Per-modality running counter: entry i's local index is the number of
-	// earlier entries sharing its modality. One pass, O(n) total.
+	// Per-modality running counter: entry i's local index is the number
+	// of earlier entries sharing its modality. See mediaPartIsWellFormed
+	// for how entries and parts stay lined up.
 	modCounter := make(map[string]int)
 	for i, entry := range reqCtx.MultimodalEntries {
 		mod := entryModality(entry, logger)
@@ -125,12 +126,10 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 
 			body, usedFallback := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod, logger)
 			if usedFallback {
-				// Coordinator invariant: for chat-completions, every
-				// MultimodalEntry pairs with the content part at the same
-				// per-modality position. A fallback means that invariant
-				// broke upstream. The encoder will reject the empty-URL
-				// sub-request loudly; log the miss here so a debugger can
-				// trace the encoder error back to the coordinator.
+				// A fallback means entries and parts got out of line
+				// upstream (see mediaPartIsWellFormed). The encoder will
+				// reject the empty-URL sub-request loudly; log the miss
+				// here so a debugger can trace it back to the coordinator.
 				logger.V(logutil.DEBUG).Info("no media part for entry, using empty-URL fallback",
 					"modality", mod,
 					"local_index", localIdx,
@@ -258,16 +257,12 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 }
 
 // collectMediaParts walks the request messages once and returns the media
-// parts grouped by modality, each per-modality list in walker (request)
-// order. The encode fanout looks up the content part for an entry by
-// (entry.Modality, per-modality position), reading from the per-modality
-// list at the per-modality position. Non-media parts (text, tool_use, etc.)
-// are skipped. Parts that fail mediaPartIsWellFormed are also skipped so
-// this walker's per-modality indexing stays in lock-step with the
-// MultimodalEntries replace_media_urls produced: any part it silently
-// dropped must not shift the pairing here. Uses partTypeModality from
-// replace_media_urls.go as the authoritative list of recognized media part
-// types.
+// parts grouped by modality, each per-modality list in the order they
+// appeared in the request. Non-media parts (text, tool_use, etc.) are
+// skipped, and so are parts that fail mediaPartIsWellFormed. See that
+// function for how the grouping stays lined up with MultimodalEntries.
+// Uses partTypeModality as the authoritative list of recognized media
+// part types.
 func collectMediaParts(body map[string]any) map[string][]map[string]any {
 	messages, _ := body["messages"].([]any)
 	partsByMod := make(map[string][]map[string]any)
@@ -315,14 +310,11 @@ var modalityFallbackPartType = map[string]string{
 // <innerMap>}, so a caller can drop the returned map directly into an
 // encode sub-request's messages[0].content slice.
 //
-// If localIdx is out of range for the given modality, an empty-shaped
-// URL part of the matching modality is returned as a safe fallback and
-// usedFallback is true. Reaching that path means the coordinator's
-// entry<->part pairing is broken; the fallback prevents a panic but
-// does not hide the bug, the encoder receives an empty URL of the
-// right modality and rejects the sub-request loudly. Callers use
-// usedFallback to log the miss so a debugger can trace the encoder
-// error back to the coordinator invariant that broke.
+// If localIdx is out of range, an empty-shaped URL part of the matching
+// modality is returned and usedFallback is true. That path means entries
+// and parts got out of line (see mediaPartIsWellFormed); the fallback
+// keeps the sub-request self-consistent so the encoder rejects it loudly.
+// Callers log the miss (see EncodeStep.Execute).
 func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality string, localIdx int) (content map[string]any, usedFallback bool) {
 	parts := partsByMod[modality]
 	if localIdx < 0 || localIdx >= len(parts) {

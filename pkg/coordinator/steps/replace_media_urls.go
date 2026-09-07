@@ -67,11 +67,19 @@ var partTypeModality = map[string]string{
 }
 
 // mediaPartIsWellFormed reports whether partMap carries the fields
-// replace_media_urls needs to produce a MultimodalEntry for it. Downstream
-// steps that pair entries with parts (encode.collectMediaParts,
-// decode.injectUUIDs) must apply the same predicate so entry i pairs with
-// the i-th well-formed part of its modality; a silently-skipped part must
-// not shift the pairing.
+// replace_media_urls needs to produce a MultimodalEntry for it.
+//
+// How entries and parts stay lined up:
+// replace_media_urls creates one entry for each media part that passes
+// this check, in the order the parts appear in the request. Later
+// steps (encode.collectMediaParts, the encode fanout, decode.injectUUIDs)
+// walk the same request in the same order, apply the same check, and
+// pair the Nth entry of a modality with the Nth part of that modality.
+// If a bad part is dropped here but kept there (or the other way
+// around), the pairing shifts and the wrong bytes get attached to the
+// wrong entry.
+//
+// Other files point back to this comment instead of repeating it.
 func mediaPartIsWellFormed(partMap map[string]any, partType string) bool {
 	inner, ok := partMap[partType].(map[string]any)
 	if !ok {
@@ -207,13 +215,11 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		return nil
 	}
 
-	// Collect every media part into one walker-order slice, tagged by kind.
-	// MultimodalEntries and the download-result slots below both index by
-	// this walker position, so encode.collectMediaParts and
-	// decode.injectUUIDs (which walk parts in the same order) pair entry i
-	// with the i-th part of its modality. Splitting URL and inline parts
-	// into separate append passes would reorder audio entries whenever a
-	// request mixes audio_url and input_audio.
+	// Collect every media part into one slice, in the order they appear
+	// in the request, tagged by kind. The request order matters for
+	// pairing entries with parts later; see mediaPartIsWellFormed.
+	// Splitting URL and inline parts into two passes would reorder audio
+	// entries whenever a request mixes audio_url and input_audio.
 	var refs []mediaRef
 	for msgIdx, msg := range messages {
 		msgMap, ok := msg.(map[string]any)
@@ -349,10 +355,9 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		return err
 	}
 
-	// Walker-order pass. URL refs get their data URI written back in
-	// place; inline refs are validated (MIME + size) now that downloads
-	// have settled. Every ref appends exactly one MultimodalEntry, in
-	// walker order.
+	// Walk refs in the order they appeared in the request: rewrite URL
+	// slots in place, validate inline refs, and add one MultimodalEntry
+	// per ref.
 	for i, ref := range refs {
 		if ref.isInline {
 			contentType, err := audioFormatToMIME(ref.format)
@@ -466,8 +471,9 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 //     base64 payload is already inline in the request body; only MIME and
 //     size validation are needed.
 //
-// Refs are collected in walker order so MultimodalEntries append order
-// matches encode.collectMediaParts / decode.injectUUIDs walk order.
+// Refs are collected in the order the parts appear in the request. That
+// order is part of how entries and parts stay lined up; see
+// mediaPartIsWellFormed.
 type mediaRef struct {
 	msgIdx   int
 	partIdx  int
