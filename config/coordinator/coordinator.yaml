@@ -148,9 +148,9 @@ pipeline:
 
         # max_video_download_size overrides max_download_size for video_url
         # items. Videos routinely need 100+ MB per clip; leave commented out
-        # only if your deployment truly does not accept video. Same codec
-        # CVE caveat as audio applies, treat pending security review as a
-        # gate on raising this in production.
+        # only if your deployment truly does not accept video. See
+        # max_audio_download_size for the codec-CVE caveat that also
+        # applies here.
         # max_video_download_size: 200
 
         # allowed_image_content_types overrides the built-in image MIME

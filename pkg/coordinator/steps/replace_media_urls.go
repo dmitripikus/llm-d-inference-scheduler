@@ -321,11 +321,11 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			if err != nil {
 				return fmt.Errorf("downloading %s: %w", ref.url, err)
 			}
-			// Audio and video decoders have historically carried more CVEs
-			// than image decoders, so the origin's Content-Type is checked
-			// against the per-modality allowlist for those two. image_url
-			// downloads accept any Content-Type; the allowlist still
-			// applies to image data URIs.
+			// Check the origin's Content-Type against the per-modality
+			// allowlist for audio and video downloads. image_url downloads
+			// accept any Content-Type; the allowlist still applies to
+			// image data URIs. See coordinator.yaml
+			// max_audio_download_size for the rationale.
 			if ref.modality != ModalityImage && !s.allowedContentTypeForModality(contentType, ref.modality) {
 				return fmt.Errorf("downloaded content type %q not allowed for %s at message %d part %d: %w",
 					contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
