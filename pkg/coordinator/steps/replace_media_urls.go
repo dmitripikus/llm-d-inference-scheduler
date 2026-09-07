@@ -243,10 +243,14 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			if partType == inputAudioPartType {
 				innerMap, ok := partMap[inputAudioPartType].(map[string]any)
 				if !ok {
+					logger.V(logutil.DEBUG).Info("skipping malformed media part: inner object missing or wrong type",
+						"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
 					continue
 				}
 				data, _ := innerMap["data"].(string)
 				if data == "" {
+					logger.V(logutil.DEBUG).Info("skipping malformed media part: data is empty or not a string",
+						"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
 					continue
 				}
 				format, _ := innerMap["format"].(string)
@@ -263,10 +267,14 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			// URL-based parts: image_url, audio_url, video_url
 			innerMap, ok := partMap[partType].(map[string]any)
 			if !ok {
+				logger.V(logutil.DEBUG).Info("skipping malformed media part: inner object missing or wrong type",
+					"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
 				continue
 			}
 			url, ok := innerMap["url"].(string)
 			if !ok {
+				logger.V(logutil.DEBUG).Info("skipping malformed media part: url is missing or not a string",
+					"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
 				continue
 			}
 			refs = append(refs, mediaRef{
@@ -445,19 +453,24 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 	if int64(len(data)) > sizeCap {
 		return nil, "", fmt.Errorf("response too large: body exceeds max %d: %w", sizeCap, pipeline.ErrBadRequest)
 	}
-	contentType := resp.Header.Get("Content-Type")
+	// Take the type off the front of the Content-Type header (drop
+	// anything after the first ";", like "codecs=..." or "charset=...")
+	// and lowercase/trim it. This matches what parseDataURI does, so
+	// the allowlist check, the rewritten data URI, and MultimodalEntry
+	// all see the same clean type. Without this, a codec list can
+	// contain a comma, and parseDataURI splits on the first comma,
+	// which breaks the URL.
+	//
+	// Strip first, then fall back to defaultContentType. That way both
+	// an empty header AND a header that is just parameters (like
+	// "; charset=utf-8", which strips to "") end up on the default. If
+	// we fell back first, the empty type would flow through and the
+	// emitted URL would look like data:;base64,...
+	media, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
+	contentType := strings.ToLower(strings.TrimSpace(media))
 	if contentType == "" {
 		contentType = defaultContentType
 	}
-	// Normalize once at the source: strip MIME parameters (";codecs=...",
-	// ";charset=..." and so on) and lowercase/trim, mirroring parseDataURI.
-	// Downstream consumers (allowlist check, data URI rewrite, MultimodalEntry) then
-	// see a bare MIME. Without this, a parameter value containing a comma
-	// (routine for multi-codec video) makes the rewritten data URI
-	// unparsable, because parseDataURI cuts on the first comma and would
-	// land inside the codecs list instead of at ;base64,.
-	media, _, _ := strings.Cut(contentType, ";")
-	contentType = strings.ToLower(strings.TrimSpace(media))
 	return data, contentType, nil
 }
 

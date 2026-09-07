@@ -1196,6 +1196,48 @@ func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_ImageURL_ParameterOnlyContentType covers a
+// Content-Type that carries only parameters and no type (e.g.
+// "; charset=utf-8"). The step should strip the parameters, notice
+// the result is empty, and fall back to the default type so the
+// rewritten URL stays well-formed. If the fallback ran before the
+// strip, the URL would come out as data:;base64,... and be unusable.
+func TestReplaceMediaURLsStep_ImageURL_ParameterOnlyContentType(t *testing.T) {
+	oddServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "; charset=utf-8")
+		_, _ = w.Write([]byte("some-bytes"))
+	}))
+	defer oddServer.Close()
+
+	step := newLoopbackStep(t, map[string]any{"download_timeout": "5s"})
+	reqCtx := &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":      "image_url",
+							"image_url": map[string]any{"url": oddServer.URL + "/thing.jpg"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("expected acceptance with fallback content type, got %v", err)
+	}
+	if got := reqCtx.MultimodalEntries[0].ContentType; got != defaultContentType {
+		t.Errorf("MultimodalEntries[0].ContentType = %q, want fallback %q", got, defaultContentType)
+	}
+	part := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	rewritten, _ := part["image_url"].(map[string]any)["url"].(string)
+	if !strings.HasPrefix(rewritten, "data:"+defaultContentType+";base64,") {
+		t.Errorf("rewritten url = %q, want prefix data:%s;base64,", rewritten, defaultContentType)
+	}
+}
+
 // TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams asserts
 // that a real audio_url / video_url whose origin returns a Content-Type
 // with MIME parameters (";codecs=...", ";charset=..." and so on) is accepted, and that
