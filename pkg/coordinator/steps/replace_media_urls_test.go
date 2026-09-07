@@ -1198,21 +1198,24 @@ func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 
 // TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams asserts
 // that a real audio_url / video_url whose origin returns a Content-Type
-// with MIME parameters (";codecs=…", ";charset=…") is accepted. Real
-// origins routinely emit these; the allowlist matches on the media-type
-// portion only, not the raw header value.
+// with MIME parameters (";codecs=…", ";charset=…") is accepted, and that
+// the parameters are stripped at the download boundary so the rewritten
+// data URI and MultimodalEntry.ContentType both carry a bare MIME. The
+// codecs case embeds a comma inside a quoted parameter value, which is
+// what breaks parseDataURI when the raw header value flows through.
 func TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		partType    string
-		urlKey      string
-		contentType string
+		name          string
+		partType      string
+		urlKey        string
+		serverHeader  string
+		wantMediaType string
 	}{
-		{"audio with charset", "audio_url", "audio_url", "audio/wav; charset=US-ASCII"},
-		{"video with codecs", "video_url", "video_url", `video/mp4; codecs="avc1.4D401E,mp4a.40.2"`},
+		{"audio with charset", "audio_url", "audio_url", "audio/wav; charset=US-ASCII", testAudioWAVMIME},
+		{"video with codecs", "video_url", "video_url", `video/mp4; codecs="avc1.4D401E,mp4a.40.2"`, testVideoMP4MIME},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ct := tc.contentType
+			ct := tc.serverHeader
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", ct)
 				_, _ = w.Write([]byte("bytes"))
@@ -1236,10 +1239,30 @@ func TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams(t *testing
 				},
 			}
 			if err := step.Execute(context.Background(), reqCtx); err != nil {
-				t.Fatalf("expected accepted Content-Type %q, got %v", tc.contentType, err)
+				t.Fatalf("expected accepted Content-Type %q, got %v", tc.serverHeader, err)
 			}
 			if got := len(reqCtx.MultimodalEntries); got != 1 {
 				t.Fatalf("expected 1 entry, got %d", got)
+			}
+			// MultimodalEntry.ContentType must be the bare media type, not
+			// the raw header, so the encoder's wire contract sees a clean
+			// value.
+			if got := reqCtx.MultimodalEntries[0].ContentType; got != tc.wantMediaType {
+				t.Errorf("MultimodalEntries[0].ContentType = %q, want bare %q", got, tc.wantMediaType)
+			}
+			// The rewritten URL must round-trip through parseDataURI. When
+			// the header carries a parameter value containing a comma, the
+			// pre-normalization code produced a URL whose first comma was
+			// inside the codecs list, so parseDataURI failed.
+			part := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+			inner := part[tc.urlKey].(map[string]any)
+			rewritten, _ := inner["url"].(string)
+			gotCT, _, err := parseDataURI(rewritten)
+			if err != nil {
+				t.Fatalf("rewritten URL not parsable as data URI: %v\nurl=%s", err, rewritten)
+			}
+			if gotCT != tc.wantMediaType {
+				t.Errorf("parseDataURI(rewritten).contentType = %q, want %q", gotCT, tc.wantMediaType)
 			}
 		})
 	}

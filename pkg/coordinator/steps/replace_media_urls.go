@@ -451,6 +451,15 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 	if contentType == "" {
 		contentType = defaultContentType
 	}
+	// Normalize once at the source: strip MIME parameters (";codecs=…",
+	// ";charset=…") and lowercase/trim, mirroring parseDataURI. Downstream
+	// consumers (allowlist check, data URI rewrite, MultimodalEntry) then
+	// see a bare MIME. Without this, a parameter value containing a comma
+	// (routine for multi-codec video) makes the rewritten data URI
+	// unparsable, because parseDataURI cuts on the first comma and would
+	// land inside the codecs list instead of at ;base64,.
+	media, _, _ := strings.Cut(contentType, ";")
+	contentType = strings.ToLower(strings.TrimSpace(media))
 	return data, contentType, nil
 }
 
