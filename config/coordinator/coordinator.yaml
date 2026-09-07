@@ -128,8 +128,13 @@ pipeline:
 
         # max_download_size caps the megabytes read per media download. A response
         # whose Content-Length or body exceeds the cap is rejected as a client
-        # error (4xx). Bounds peak memory together with the two limits above:
-        # roughly max_concurrent_downloads x max_download_size x ~2.3 MB.
+        # error (4xx). Peak memory is bounded by max_concurrent_downloads x
+        # (largest active cap in MB) x ~2.3, where the 2.3 factor covers
+        # the raw bytes and their base64 form living in memory at the same
+        # time during encoding. With the defaults (10 concurrent x 10 MB)
+        # that is ~230 MB. Raising a per-modality cap below raises the
+        # ceiling in proportion: 10 concurrent downloads at
+        # max_video_download_size: 200 peak around 4.6 GB.
         # data: URIs do not hit the network and are unaffected. This value is
         # the global default; each modality below may override it. Default 10 MB.
         # max_download_size: 10
