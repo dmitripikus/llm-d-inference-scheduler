@@ -380,13 +380,6 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			continue
 		}
 		r := results[i]
-		// r.contentType is set on every URL ref the download/parse path
-		// populated. Skip a zero-valued slot defensively so a future path
-		// that leaves results[i] unset after g.Wait cannot panic on a
-		// nil-map write.
-		if ref.urlMap == nil {
-			continue
-		}
 		if !strings.HasPrefix(ref.url, "data:") {
 			ref.urlMap["url"] = fmt.Sprintf("data:%s;base64,%s", r.contentType, r.base64Data)
 		}
