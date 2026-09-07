@@ -100,7 +100,7 @@ func (s *DecodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.RequestContext) {
 	logger := log.FromContext(ctx).WithName(DecodeStepName)
 	kvParams := s.kv.PrepareDecodeKVParams(ctx, reqCtx)
-	s.injectUUIDs(ctx, reqCtx)
+	s.injectUUIDs(reqCtx, logger)
 
 	format := resolveFormat(s.useOpenAIFormat, reqCtx.OriginalPath)
 	switch format {
@@ -141,13 +141,11 @@ func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext, logger l
 // MultimodalEntry that shares its modality and local index, the same
 // invariant the encode fanout uses. Non-media parts (text, tool_use,
 // unknown types) are skipped.
-func (s *DecodeStep) injectUUIDs(ctx context.Context, reqCtx *pipeline.RequestContext) {
+func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext, logger logr.Logger) {
 	messages, ok := reqCtx.Body["messages"].([]any)
 	if !ok {
 		return
 	}
-
-	logger := log.FromContext(ctx).WithName(DecodeStepName)
 
 	// Group hashes by modality, preserving entry order. Later, the walker
 	// indexes into hashesByMod[modality] at the per-modality position for

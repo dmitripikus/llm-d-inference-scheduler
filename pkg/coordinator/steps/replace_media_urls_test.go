@@ -1198,7 +1198,7 @@ func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 
 // TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams asserts
 // that a real audio_url / video_url whose origin returns a Content-Type
-// with MIME parameters (";codecs=…", ";charset=…") is accepted, and that
+// with MIME parameters (";codecs=...", ";charset=..." and so on) is accepted, and that
 // the parameters are stripped at the download boundary so the rewritten
 // data URI and MultimodalEntry.ContentType both carry a bare MIME. The
 // codecs case embeds a comma inside a quoted parameter value, which is
@@ -1339,10 +1339,9 @@ func TestReplaceMediaURLsStep_VideoURL_RejectsUnexpectedContentType(t *testing.T
 }
 
 // TestReplaceMediaURLsStep_ImageURL_PermissiveContentType documents that
-// image_url downloads intentionally keep their pre-existing permissive
-// behavior, an unexpected Content-Type is accepted. Audio and video are
-// stricter; image is not tightened here to avoid breaking traffic that
-// relies on the current behavior.
+// image_url downloads intentionally accept any Content-Type. Audio and
+// video are stricter; image is not tightened to avoid breaking traffic
+// that relies on this behavior.
 func TestReplaceMediaURLsStep_ImageURL_PermissiveContentType(t *testing.T) {
 	oddServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

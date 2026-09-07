@@ -132,9 +132,9 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 				// sub-request loudly; log the miss here so a debugger can
 				// trace the encoder error back to the coordinator.
 				logger.V(logutil.DEBUG).Info("no media part for entry, using empty-URL fallback",
-					"modality", entryModality(entry, logger),
+					"modality", mod,
 					"local_index", localIdx,
-					"parts_available", len(partsByMod[entryModality(entry, logger)]))
+					"parts_available", len(partsByMod[mod]))
 			}
 
 			bodyBytes, err := json.Marshal(body)

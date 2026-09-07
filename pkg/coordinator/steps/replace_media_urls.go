@@ -324,8 +324,8 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			// Audio and video decoders have historically carried more CVEs
 			// than image decoders, so the origin's Content-Type is checked
 			// against the per-modality allowlist for those two. image_url
-			// keeps its pre-existing permissive treatment on downloads (data
-			// URIs are still checked).
+			// downloads accept any Content-Type; the allowlist still
+			// applies to image data URIs.
 			if ref.modality != ModalityImage && !s.allowedContentTypeForModality(contentType, ref.modality) {
 				return fmt.Errorf("downloaded content type %q not allowed for %s at message %d part %d: %w",
 					contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
@@ -444,9 +444,9 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 	if contentType == "" {
 		contentType = defaultContentType
 	}
-	// Normalize once at the source: strip MIME parameters (";codecs=…",
-	// ";charset=…") and lowercase/trim, mirroring parseDataURI. Downstream
-	// consumers (allowlist check, data URI rewrite, MultimodalEntry) then
+	// Normalize once at the source: strip MIME parameters (";codecs=...",
+	// ";charset=..." and so on) and lowercase/trim, mirroring parseDataURI.
+	// Downstream consumers (allowlist check, data URI rewrite, MultimodalEntry) then
 	// see a bare MIME. Without this, a parameter value containing a comma
 	// (routine for multi-codec video) makes the rewritten data URI
 	// unparsable, because parseDataURI cuts on the first comma and would
@@ -525,7 +525,7 @@ var defaultAllowedContentTypesByModality = map[string]map[string]struct{}{
 
 // allowedContentTypeForModality reports whether contentType is allowed for
 // modality per the step's configured allowlist. MIME parameters
-// (";codecs=…", ";charset=…") are stripped before comparison, so a real
+// (";codecs=...", ";charset=..." and so on) are stripped before comparison, so a real
 // origin returning e.g. `video/mp4; codecs="avc1.4D401E"` matches the
 // bare `video/mp4` entry. Comparison is case-insensitive with whitespace
 // trimmed.

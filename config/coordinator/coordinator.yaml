@@ -108,7 +108,7 @@ pipeline:
     # audio_url, and video_url content parts (base64-inlining them as data:
     # URIs), validates input_audio inline items, and seeds MultimodalEntries
     # for every recognized media part. All modalities feed into the encode
-    # step's fanout, the encoder pod must accept audio/video content-part
+    # step's fanout. The encoder pod must accept audio/video content-part
     # types.
     # -------------------------------------------------------------------
     - type: replace-media-urls
