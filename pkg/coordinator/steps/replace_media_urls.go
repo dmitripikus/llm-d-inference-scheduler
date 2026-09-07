@@ -645,8 +645,8 @@ func parseContentTypeSet(raw any, fieldName string) (map[string]struct{}, error)
 }
 
 // audioFormatMIME maps OpenAI's input_audio.format values to canonical MIME
-// types. OpenAI documents "wav" and "mp3" today; the additional entries
-// mirror what the backend commonly accepts.
+// types. "wav" and "mp3" match OpenAI's chat-completions API; the other
+// entries cover formats backends commonly accept.
 var audioFormatMIME = map[string]string{
 	"wav":  "audio/wav",
 	"mp3":  "audio/mpeg",
