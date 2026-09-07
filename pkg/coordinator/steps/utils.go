@@ -113,7 +113,7 @@ func capSingleTokenOutput(body map[string]any, format gateway.RequestFormat) {
 // and optionally kwargs_data) from the request's multimodal entries. It returns
 // nil when there are no entries. Entries are grouped by Modality so a
 // mixed-modality request produces one key per modality in each feature map.
-func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool) map[string]any {
+func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, logger logr.Logger) map[string]any {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -121,7 +121,7 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool) map
 	placeholdersByMod := make(map[string][]any)
 	kwargsByMod := make(map[string][]any)
 	for _, entry := range entries {
-		mod := entryModality(entry)
+		mod := entryModality(entry, logger)
 		hashesByMod[mod] = append(hashesByMod[mod], entry.Hash)
 		placeholdersByMod[mod] = append(placeholdersByMod[mod], map[string]any{
 			"offset": entry.Placeholder.Offset,
@@ -140,12 +140,16 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool) map
 }
 
 // entryModality returns the entry's Modality with an empty-string fallback
-// to ModalityImage. All production entry producers (replace_media_urls,
-// extractMultimodalEntries) set Modality explicitly; the fallback exists so
-// callers constructing entries directly (mostly test fixtures predating the
-// Modality field) do not silently produce a "" modality key.
-func entryModality(entry pipeline.MultimodalEntry) string {
+// to ModalityImage. Production entry producers (replace_media_urls,
+// extractMultimodalEntries) always set Modality; the fallback covers
+// callers that construct entries directly without setting the field so
+// they do not silently produce a "" modality key. A production entry
+// reaching the fallback is a coordinator invariant break, so log at
+// DEBUG on the default branch to make a real occurrence discoverable.
+func entryModality(entry pipeline.MultimodalEntry, logger logr.Logger) string {
 	if entry.Modality == "" {
+		logger.V(logutil.DEBUG).Info("MultimodalEntry has empty Modality; defaulting to image",
+			"hash", entry.Hash, "index", entry.Index)
 		return ModalityImage
 	}
 	return entry.Modality

@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
+
 	"github.com/llm-d/llm-d-router/pkg/coordinator/gateway"
 	"github.com/llm-d/llm-d-router/pkg/coordinator/pipeline"
 )
@@ -584,7 +586,7 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 	}
 
 	t.Run("all cache-hit -> all null", func(t *testing.T) {
-		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(""), entry("")}, true)
+		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(""), entry("")}, true, logr.Discard())
 		items := mmImageKwargs(t, features)
 		if len(items) != 2 {
 			t.Fatalf("expected 2 kwargs_data entries, got %d: %v", len(items), items)
@@ -602,7 +604,7 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 	})
 
 	t.Run("mixed batch keeps inline, nulls cache hits", func(t *testing.T) {
-		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(testKwargs), entry("")}, true)
+		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(testKwargs), entry("")}, true, logr.Discard())
 		items := mmImageKwargs(t, features)
 		if len(items) != 2 || items[0] != testKwargs || items[1] != nil {
 			t.Fatalf("expected [\"dGVuc29y\", null], got %#v", items)
@@ -610,7 +612,7 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 	})
 
 	t.Run("includeKwargs=false omits the field", func(t *testing.T) {
-		features := buildMMFeatures([]pipeline.MultimodalEntry{entry("")}, false)
+		features := buildMMFeatures([]pipeline.MultimodalEntry{entry("")}, false, logr.Discard())
 		if _, ok := features["kwargs_data"]; ok {
 			t.Errorf("expected kwargs_data absent when includeKwargs is false")
 		}
@@ -632,7 +634,7 @@ func TestBuildMMFeatures_GroupsByModality(t *testing.T) {
 		{Index: 3, Modality: ModalityVideo, Hash: "vid-a", KwargsData: "k-vid-a",
 			Placeholder: pipeline.PlaceholderRange{Offset: 10, Length: 5}},
 	}
-	features := buildMMFeatures(entries, true)
+	features := buildMMFeatures(entries, true, logr.Discard())
 
 	hashes, ok := features["mm_hashes"].(map[string][]string)
 	if !ok {

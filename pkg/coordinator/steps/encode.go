@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
@@ -116,13 +117,13 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 	// earlier entries sharing its modality. One pass, O(n) total.
 	modCounter := make(map[string]int)
 	for i, entry := range reqCtx.MultimodalEntries {
-		mod := entryModality(entry)
+		mod := entryModality(entry, logger)
 		localIdx := modCounter[mod]
 		modCounter[mod]++
 		g.Go(func() error {
 			tokenIDs := s.buildEncodeTokenIDs(reqCtx.TokenIDs, entry)
 
-			body, usedFallback := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod)
+			body, usedFallback := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod, logger)
 			if usedFallback {
 				// Coordinator invariant: for chat-completions, every
 				// MultimodalEntry pairs with the content part at the same
@@ -131,9 +132,9 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 				// sub-request loudly; log the miss here so a debugger can
 				// trace the encoder error back to the coordinator.
 				logger.V(logutil.DEBUG).Info("no media part for entry, using empty-URL fallback",
-					"modality", entryModality(entry),
+					"modality", entryModality(entry, logger),
 					"local_index", localIdx,
-					"parts_available", len(partsByMod[entryModality(entry)]))
+					"parts_available", len(partsByMod[entryModality(entry, logger)]))
 			}
 
 			bodyBytes, err := json.Marshal(body)
@@ -217,8 +218,8 @@ func (s *EncodeStep) buildEncodeTokenIDs(fullTokenIDs []int, entry pipeline.Mult
 	return tokenIDs
 }
 
-func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any) (body map[string]any, usedFallback bool) {
-	mod := entryModality(entry)
+func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any, logger logr.Logger) (body map[string]any, usedFallback bool) {
+	mod := entryModality(entry, logger)
 	placeholder := map[string]any{"offset": 1, "length": entry.Placeholder.Length}
 	switch format {
 	case gateway.FormatChatCompletions:

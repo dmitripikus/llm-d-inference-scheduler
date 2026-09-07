@@ -298,7 +298,7 @@ func (s *RenderStep) executeChatCompletions(ctx context.Context, reqCtx *pipelin
 	// 2... and each entry pairs with the response slot at that position.
 	modIndex := make(map[string]int)
 	for i := range reqCtx.MultimodalEntries {
-		mod := entryModality(reqCtx.MultimodalEntries[i])
+		mod := entryModality(reqCtx.MultimodalEntries[i], logger)
 		idx := modIndex[mod]
 		modIndex[mod]++
 		hashes := renderResp.Features.MMHashes[mod]

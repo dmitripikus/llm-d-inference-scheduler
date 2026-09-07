@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
@@ -97,6 +98,7 @@ func (s *DecodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 // maps.Clone would still share. This is sound only while the pipeline runs steps
 // sequentially; if it ever goes concurrent, decode must copy like the others.
 func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.RequestContext) {
+	logger := log.FromContext(ctx).WithName(DecodeStepName)
 	kvParams := s.kv.PrepareDecodeKVParams(ctx, reqCtx)
 	s.injectUUIDs(ctx, reqCtx)
 
@@ -104,7 +106,7 @@ func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.Req
 	switch format {
 	case gateway.FormatChatCompletions:
 		reqCtx.Body[reqcommon.FieldKVTransferParams] = kvParams
-		s.injectTokensField(reqCtx)
+		s.injectTokensField(reqCtx, logger)
 	case gateway.FormatCompletions:
 		reqCtx.Body[reqcommon.FieldKVTransferParams] = kvParams
 		if len(reqCtx.TokenIDs) > 0 {
@@ -124,11 +126,11 @@ func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.Req
 	}
 }
 
-func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext) {
+func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext, logger logr.Logger) {
 	tokens := map[string]any{
 		"token_ids": reqCtx.TokenIDs,
 	}
-	if features := buildMMFeatures(reqCtx.MultimodalEntries, false); features != nil {
+	if features := buildMMFeatures(reqCtx.MultimodalEntries, false, logger); features != nil {
 		tokens["features"] = features
 	}
 	reqCtx.Body["tokens"] = tokens
@@ -152,7 +154,7 @@ func (s *DecodeStep) injectUUIDs(ctx context.Context, reqCtx *pipeline.RequestCo
 	// O(1) lookup per part. Build is O(n).
 	hashesByMod := make(map[string][]string)
 	for _, entry := range reqCtx.MultimodalEntries {
-		mod := entryModality(entry)
+		mod := entryModality(entry, logger)
 		hashesByMod[mod] = append(hashesByMod[mod], entry.Hash)
 	}
 
