@@ -165,8 +165,18 @@ pipeline:
         # convention.
 
         # allowed_image_content_types overrides the built-in image MIME
-        # allowlist for image_url data URIs. When set to a non-empty list,
-        # ONLY these types are accepted. An empty list accepts any type.
+        # allowlist. When set to a non-empty list, ONLY these types are
+        # accepted -- for image_url data URIs AND for the Content-Type an
+        # http(s) image_url origin returns. An empty list accepts any type.
+        #
+        # Leaving this unset is not the same as listing the defaults: the
+        # built-in default is enforced on data URIs only, because plenty of
+        # origins serve a valid image as application/octet-stream or with no
+        # Content-Type at all, and rejecting those would break traffic that
+        # has always worked. Setting the param is read as a deliberate
+        # lockdown and covers both paths. Audio and video downloads are
+        # always checked; see max_audio_download_size for why they are
+        # treated more strictly.
         # Default: image/jpeg, image/png, image/gif, image/webp.
         # allowed_image_content_types:
         #   - image/jpeg

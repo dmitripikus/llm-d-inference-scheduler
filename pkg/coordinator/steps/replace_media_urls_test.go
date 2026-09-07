@@ -1354,9 +1354,12 @@ func TestReplaceMediaURLsStep_VideoURL_RejectsUnexpectedContentType(t *testing.T
 }
 
 // TestReplaceMediaURLsStep_ImageURL_PermissiveContentType documents that
-// image_url downloads intentionally accept any Content-Type. Audio and
-// video are stricter; image is not tightened to avoid breaking traffic
-// that relies on this behavior.
+// image_url downloads accept any Content-Type under the built-in default
+// allowlist. Audio and video are stricter; the image default is not
+// tightened to avoid breaking traffic that relies on this behavior. An
+// operator who sets allowed_image_content_types explicitly does get
+// enforcement here, covered by
+// TestReplaceMediaURLsStep_ImageURL_ExplicitAllowlistAppliesToDownload.
 func TestReplaceMediaURLsStep_ImageURL_PermissiveContentType(t *testing.T) {
 	oddServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -1382,6 +1385,50 @@ func TestReplaceMediaURLsStep_ImageURL_PermissiveContentType(t *testing.T) {
 	}
 	if err := step.Execute(context.Background(), reqCtx); err != nil {
 		t.Fatalf("expected permissive behavior for image_url, got %v", err)
+	}
+}
+
+// TestReplaceMediaURLsStep_ImageURL_ExplicitAllowlistAppliesToDownload
+// covers the other half of the image content-type rule: once an operator
+// sets allowed_image_content_types, the list is enforced on downloaded
+// bytes too, not just on data URIs. Without this the origin's
+// Content-Type would be inlined verbatim into the rewritten data URI and
+// the operator's lockdown would be a no-op on the HTTP path.
+func TestReplaceMediaURLsStep_ImageURL_ExplicitAllowlistAppliesToDownload(t *testing.T) {
+	jpegServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", testImageJPEGMIME)
+		_, _ = w.Write([]byte("jpeg-bytes"))
+	}))
+	defer jpegServer.Close()
+
+	imageReq := func() *pipeline.RequestContext {
+		return &pipeline.RequestContext{Body: map[string]any{
+			"messages": []any{
+				map[string]any{"role": "user", "content": []any{
+					map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": jpegServer.URL + "/photo.jpg"},
+					},
+				}},
+			},
+		}}
+	}
+
+	// Narrowed to image/png only: the image/jpeg download is rejected.
+	narrowed := newLoopbackStep(t, map[string]any{
+		"allowed_image_content_types": []any{testImagePNGMIME},
+	})
+	err := narrowed.Execute(context.Background(), imageReq())
+	if err == nil || !errors.Is(err, pipeline.ErrBadRequest) {
+		t.Fatalf("expected image/jpeg download rejected under image/png-only override, got %v", err)
+	}
+
+	// Explicitly unrestricted: the same download is accepted.
+	unrestricted := newLoopbackStep(t, map[string]any{
+		"allowed_image_content_types": []any{},
+	})
+	if err := unrestricted.Execute(context.Background(), imageReq()); err != nil {
+		t.Fatalf("expected empty image allowlist to accept any download type, got %v", err)
 	}
 }
 
@@ -2158,14 +2205,14 @@ func TestReplaceMediaURLsStep_AllowedContentTypes_EmptyMeansUnrestricted(t *test
 // the returned image set must not appear in a fresh call. This protects
 // every subsequent ReplaceMediaURLsStep from picking up leaked overrides.
 func TestParsePerModalityContentTypes_DoesNotAliasDefaults(t *testing.T) {
-	first, err := parsePerModalityContentTypes(nil)
+	first, _, err := parsePerModalityContentTypes(nil)
 	if err != nil {
 		t.Fatalf("parsePerModalityContentTypes returned error: %v", err)
 	}
 	const poison = "application/x-poison"
 	first[ModalityImage][poison] = struct{}{}
 
-	second, err := parsePerModalityContentTypes(nil)
+	second, _, err := parsePerModalityContentTypes(nil)
 	if err != nil {
 		t.Fatalf("parsePerModalityContentTypes returned error: %v", err)
 	}

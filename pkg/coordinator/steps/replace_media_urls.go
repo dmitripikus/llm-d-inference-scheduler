@@ -118,8 +118,13 @@ type ReplaceMediaURLsStep struct {
 	// data URIs and to input_audio inline items. Keys are Modality* constants;
 	// values are lowercase MIME strings.
 	allowedContentTypes map[string]map[string]struct{}
-	guard               *addressGuard
-	client              *http.Client
+	// contentTypeOverrides records which modalities the operator configured
+	// an allowed_<modality>_content_types param for, so the step can tell an
+	// explicit allowlist from the built-in default. Only the image modality
+	// reads it; see enforceDownloadContentType.
+	contentTypeOverrides map[string]struct{}
+	guard                *addressGuard
+	client               *http.Client
 }
 
 func NewReplaceMediaURLsStep(_ *gateway.Client, params map[string]any) (pipeline.Step, error) {
@@ -172,8 +177,9 @@ func NewReplaceMediaURLsStep(_ *gateway.Client, params map[string]any) (pipeline
 	}
 
 	// Optional per-modality MIME allowlist overrides. Each param, when set,
-	// replaces the built-in default set for that modality.
-	allowedContentTypes, err := parsePerModalityContentTypes(params)
+	// replaces the built-in default set for that modality. overrides names
+	// the modalities that were set explicitly.
+	allowedContentTypes, overrides, err := parsePerModalityContentTypes(params)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +205,7 @@ func NewReplaceMediaURLsStep(_ *gateway.Client, params map[string]any) (pipeline
 		maxDownloadSize:        maxDownloadSize,
 		maxDownloadSizeByMod:   maxDownloadSizeByMod,
 		allowedContentTypes:    allowedContentTypes,
+		contentTypeOverrides:   overrides,
 		guard:                  guard,
 	}
 	step.client = guard.newClient(timeout)
@@ -336,11 +343,10 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 				return fmt.Errorf("downloading %s: %w", ref.url, err)
 			}
 			// Check the origin's Content-Type against the per-modality
-			// allowlist for audio and video downloads. image_url downloads
-			// accept any Content-Type; the allowlist still applies to
-			// image data URIs. See coordinator.yaml
-			// max_audio_download_size for the rationale.
-			if ref.modality != ModalityImage && !s.allowedContentTypeForModality(contentType, ref.modality) {
+			// allowlist. Which modalities this covers on the download path
+			// is decided by enforceDownloadContentType; the allowlist always
+			// applies to data URIs regardless.
+			if s.enforceDownloadContentType(ref.modality) && !s.allowedContentTypeForModality(contentType, ref.modality) {
 				return fmt.Errorf("downloaded content type %q not allowed for %s at message %d part %d: %w",
 					contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 			}
@@ -563,6 +569,28 @@ func (s *ReplaceMediaURLsStep) allowedContentTypeForModality(contentType, modali
 	return ok
 }
 
+// enforceDownloadContentType reports whether the per-modality allowlist is
+// applied to the Content-Type an HTTP origin returned. Data URIs are always
+// checked; this governs the download path only.
+//
+// Audio and video are always enforced: their decoders carry more CVEs than
+// image decoders (see coordinator.yaml max_audio_download_size), so pinning
+// the container type before the bytes reach a backend is worth the strictness.
+//
+// Images are enforced only when the operator set allowed_image_content_types
+// explicitly. Enforcing the built-in default here would reject the many
+// origins that serve a perfectly good image as application/octet-stream, or
+// with no Content-Type at all (which lands on defaultContentType) -- traffic
+// that has always been accepted. An explicit allowlist is a deliberate
+// lockdown, so it applies to downloads as well as data URIs.
+func (s *ReplaceMediaURLsStep) enforceDownloadContentType(modality string) bool {
+	if modality != ModalityImage {
+		return true
+	}
+	_, explicit := s.contentTypeOverrides[ModalityImage]
+	return explicit
+}
+
 // downloadSizeFor returns the per-modality download cap when the operator set
 // one, else the global default. Callers use this both for HTTP downloads
 // (Content-Length + LimitReader bound) and for input_audio inline size checks.
@@ -624,7 +652,12 @@ var perModalityContentTypeParams = map[string]string{
 // modality", matching allowed_domains's convention. That maps to a nil
 // value in the returned map, which allowedContentTypeForModality treats
 // as "accept anything".
-func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]struct{}, error) {
+//
+// The second return value names the modalities that were configured
+// explicitly, empty lists included. A default set and an override that
+// happens to match it are indistinguishable in the first return value, and
+// enforceDownloadContentType needs to tell them apart.
+func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]struct{}, map[string]struct{}, error) {
 	out := make(map[string]map[string]struct{}, len(defaultAllowedContentTypesByModality))
 	for mod, set := range defaultAllowedContentTypesByModality {
 		// Clone so a caller mutating the returned per-modality set never
@@ -632,6 +665,7 @@ func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]
 		// future ReplaceMediaURLsStep in the process).
 		out[mod] = maps.Clone(set)
 	}
+	overrides := make(map[string]struct{}, len(perModalityContentTypeParams))
 	for mod, key := range perModalityContentTypeParams {
 		raw, present := params[key]
 		if !present || raw == nil {
@@ -639,8 +673,9 @@ func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]
 		}
 		types, err := parseContentTypeSet(raw, key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		overrides[mod] = struct{}{}
 		if len(types) == 0 {
 			// Empty list = accept anything for this modality.
 			out[mod] = nil
@@ -648,7 +683,7 @@ func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]
 		}
 		out[mod] = types
 	}
-	return out, nil
+	return out, overrides, nil
 }
 
 // parseContentTypeSet accepts a list of MIME strings as either []any (YAML
