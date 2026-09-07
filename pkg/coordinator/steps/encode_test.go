@@ -740,7 +740,10 @@ func TestBuildSingleMediaContent_PerModality(t *testing.T) {
 		{"video_url", ModalityVideo, 0, "video_url", "video_url"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildSingleMediaContent(partsByMod, tc.modality, tc.localIdx)
+			got, usedFallback := buildSingleMediaContent(partsByMod, tc.modality, tc.localIdx)
+			if usedFallback {
+				t.Errorf("in-range lookup should not use fallback")
+			}
 			if got["type"] != tc.wantType {
 				t.Errorf("type = %v, want %q", got["type"], tc.wantType)
 			}
@@ -774,7 +777,10 @@ func TestBuildSingleMediaContent_OutOfRangeFallback(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// 99 is out of range for every modality in partsByMod, so the
 			// fallback path runs regardless of which modality is under test.
-			got := buildSingleMediaContent(partsByMod, tc.modality, 99)
+			got, usedFallback := buildSingleMediaContent(partsByMod, tc.modality, 99)
+			if !usedFallback {
+				t.Errorf("out-of-range lookup should signal fallback")
+			}
 			if got["type"] != tc.wantType {
 				t.Errorf("type = %v, want %q", got["type"], tc.wantType)
 			}

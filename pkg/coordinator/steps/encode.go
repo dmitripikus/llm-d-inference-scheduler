@@ -122,7 +122,19 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 		g.Go(func() error {
 			tokenIDs := s.buildEncodeTokenIDs(reqCtx.TokenIDs, entry)
 
-			body := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod)
+			body, usedFallback := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod)
+			if usedFallback {
+				// Coordinator invariant: for chat-completions, every
+				// MultimodalEntry pairs with the content part at the same
+				// per-modality position. A fallback means that invariant
+				// broke upstream. The encoder will reject the empty-URL
+				// sub-request loudly; log the miss here so a debugger can
+				// trace the encoder error back to the coordinator.
+				logger.V(logutil.DEBUG).Info("no media part for entry, using empty-URL fallback",
+					"modality", entryModality(entry),
+					"local_index", localIdx,
+					"parts_available", len(partsByMod[entryModality(entry)]))
+			}
 
 			bodyBytes, err := json.Marshal(body)
 			if err != nil {
@@ -205,12 +217,12 @@ func (s *EncodeStep) buildEncodeTokenIDs(fullTokenIDs []int, entry pipeline.Mult
 	return tokenIDs
 }
 
-func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any) map[string]any {
+func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any) (body map[string]any, usedFallback bool) {
 	mod := entryModality(entry)
 	placeholder := map[string]any{"offset": 1, "length": entry.Placeholder.Length}
 	switch format {
 	case gateway.FormatChatCompletions:
-		mediaContent := buildSingleMediaContent(partsByMod, mod, localIdx)
+		mediaContent, fallback := buildSingleMediaContent(partsByMod, mod, localIdx)
 		body := map[string]any{
 			"model": reqCtx.Model,
 			"messages": []any{
@@ -228,7 +240,7 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 			},
 		}
 		capSingleTokenOutput(body, format)
-		return body
+		return body, fallback
 	default:
 		body := map[string]any{
 			"model":     reqCtx.Model,
@@ -240,7 +252,7 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 			},
 		}
 		capSingleTokenOutput(body, format)
-		return body
+		return body, false
 	}
 }
 
@@ -303,12 +315,14 @@ var modalityFallbackPartType = map[string]string{
 // encode sub-request's messages[0].content slice.
 //
 // If localIdx is out of range for the given modality, an empty-shaped
-// URL part of the matching modality is returned as a safe fallback.
-// Reaching that path means the coordinator's entry<->part pairing is
-// broken; the fallback prevents a panic but does not hide the bug, the
-// encoder receives an empty URL of the right modality and rejects the
-// sub-request loudly.
-func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality string, localIdx int) map[string]any {
+// URL part of the matching modality is returned as a safe fallback and
+// usedFallback is true. Reaching that path means the coordinator's
+// entry<->part pairing is broken; the fallback prevents a panic but
+// does not hide the bug, the encoder receives an empty URL of the
+// right modality and rejects the sub-request loudly. Callers use
+// usedFallback to log the miss so a debugger can trace the encoder
+// error back to the coordinator invariant that broke.
+func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality string, localIdx int) (content map[string]any, usedFallback bool) {
 	parts := partsByMod[modality]
 	if localIdx < 0 || localIdx >= len(parts) {
 		partType, ok := modalityFallbackPartType[modality]
@@ -318,14 +332,14 @@ func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality st
 		return map[string]any{
 			"type":   partType,
 			partType: map[string]any{"url": ""},
-		}
+		}, true
 	}
 	p := parts[localIdx]
 	partType, _ := p["type"].(string)
 	return map[string]any{
 		"type":   partType,
 		partType: p[partType],
-	}
+	}, false
 }
 
 type encodeResponse struct {
