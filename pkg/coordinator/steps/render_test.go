@@ -112,6 +112,85 @@ func TestRenderStep_ParsesFullResponse(t *testing.T) {
 	}
 }
 
+// TestRenderStep_ChatCompletions_MultipleModalities covers the chat-completions
+// path with entries in three modalities (image, audio, video). The render
+// server returns per-modality slices, and the step must fill each entry
+// with the hash, placeholder, and kwargs from the slot that matches its
+// modality and its per-modality position. Without this test the multi-
+// modality bounds check and per-modality walker in render.go have no
+// coverage on the chat-completions path.
+func TestRenderStep_ChatCompletions_MultipleModalities(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token_ids": []int{1, 32000, 32000, 32000, 51000, 51000, 71000, 71000, 71000},
+			"features": map[string]any{
+				"mm_hashes": map[string][]string{
+					ModalityImage: {"img-hash"},
+					ModalityAudio: {"aud-hash"},
+					ModalityVideo: {"vid-hash"},
+				},
+				"mm_placeholders": map[string][]any{
+					ModalityImage: {map[string]any{"offset": 1, "length": 3}},
+					ModalityAudio: {map[string]any{"offset": 4, "length": 2}},
+					ModalityVideo: {map[string]any{"offset": 6, "length": 3}},
+				},
+				"kwargs_data": map[string][]string{
+					ModalityImage: {"aW1n"},
+					ModalityAudio: {"YXVk"},
+					ModalityVideo: {"dmlk"},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	step, err := NewRenderStep(nil, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step.(*RenderStep).SetServiceAddress(server.URL)
+
+	// Entries are pre-populated in walker order (image, audio, video), the
+	// same order replace_media_urls would produce for a request that mixes
+	// the three modalities. Render fills in Hash/Placeholder/KwargsData
+	// per entry from the matching per-modality slot.
+	reqCtx := &pipeline.RequestContext{
+		OriginalPath: gateway.PathChatCompletions,
+		Body:         map[string]any{"model": "test-model", "messages": []any{}},
+		Model:        "test-model",
+		MultimodalEntries: []pipeline.MultimodalEntry{
+			{Index: 0, Modality: ModalityImage},
+			{Index: 1, Modality: ModalityAudio},
+			{Index: 2, Modality: ModalityVideo},
+		},
+	}
+
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []struct {
+		hash     string
+		kwargs   string
+		modality string
+		offset   int
+		length   int
+	}{
+		{"img-hash", "aW1n", ModalityImage, 1, 3},
+		{"aud-hash", "YXVk", ModalityAudio, 4, 2},
+		{"vid-hash", "dmlk", ModalityVideo, 6, 3},
+	}
+	for i, w := range want {
+		got := reqCtx.MultimodalEntries[i]
+		if got.Hash != w.hash || got.KwargsData != w.kwargs ||
+			got.Modality != w.modality ||
+			got.Placeholder.Offset != w.offset || got.Placeholder.Length != w.length {
+			t.Errorf("entry %d = %+v, want hash=%q kwargs=%q modality=%q offset=%d length=%d",
+				i, got, w.hash, w.kwargs, w.modality, w.offset, w.length)
+		}
+	}
+}
+
 func TestRenderStep_RunsEvenWithNoMultimodal(t *testing.T) {
 	var called bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

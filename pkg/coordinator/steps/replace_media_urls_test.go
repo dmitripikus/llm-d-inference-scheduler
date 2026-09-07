@@ -2040,6 +2040,68 @@ func TestReplaceMediaURLsStep_AllowedAudioContentTypes_Overrides(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_AllowedVideoContentTypes_Overrides mirrors the
+// image and audio cases for the video allowlist: narrowing to
+// {video/mp4} rejects the default-allowed video/webm.
+func TestReplaceMediaURLsStep_AllowedVideoContentTypes_Overrides(t *testing.T) {
+	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{
+		"allowed_video_content_types": []any{testVideoMP4MIME},
+	})
+	reject := &pipeline.RequestContext{Body: map[string]any{
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "data:video/webm;base64,GkXf"}},
+			}},
+		},
+	}}
+	err := step.Execute(context.Background(), reject)
+	if err == nil || !errors.Is(err, pipeline.ErrBadRequest) {
+		t.Fatalf("expected video/webm rejected under video/mp4-only override, got %v", err)
+	}
+}
+
+// TestReplaceMediaURLsStep_MaxImageDownloadSize_OverridesGlobal mirrors the
+// video case for max_image_download_size: a payload rejected under a
+// 1 MB global cap is accepted when the image-only cap is raised.
+func TestReplaceMediaURLsStep_MaxImageDownloadSize_OverridesGlobal(t *testing.T) {
+	// 2 MB image payload.
+	payload := make([]byte, 2*1024*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", testImagePNGMIME)
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	body := func() *pipeline.RequestContext {
+		return &pipeline.RequestContext{Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{"type": "image_url", "image_url": map[string]any{"url": server.URL + "/photo.png"}},
+					},
+				},
+			},
+		}}
+	}
+
+	// Rejected under a 1 MB global cap.
+	tight := newLoopbackStep(t, map[string]any{"max_download_size": 1})
+	err := tight.Execute(context.Background(), body())
+	if err == nil || !errors.Is(err, pipeline.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest under 1 MB global cap, got %v", err)
+	}
+
+	// Accepted when max_image_download_size raises the image-only cap.
+	loose := newLoopbackStep(t, map[string]any{
+		"max_download_size":       1,
+		"max_image_download_size": 5,
+	})
+	if err := loose.Execute(context.Background(), body()); err != nil {
+		t.Fatalf("expected acceptance under 5 MB image-specific cap, got %v", err)
+	}
+}
+
 // TestReplaceMediaURLsStep_AllowedImageContentTypes_Overrides mirrors the
 // audio case for the image allowlist: narrowing to {image/png} rejects the
 // default-allowed image/jpeg.
