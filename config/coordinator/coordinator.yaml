@@ -158,9 +158,16 @@ pipeline:
         # applies here.
         # max_video_download_size: 200
 
+        # allowed_{image,audio,video}_content_types below each REPLACE the
+        # built-in allowlist for that modality when set to a non-empty
+        # list. Set to an empty list to accept any content type for that
+        # modality, matching allowed_domains's "empty means unrestricted"
+        # convention.
+
         # allowed_image_content_types overrides the built-in image MIME
-        # allowlist for image_url data URIs. When set, ONLY these types are
-        # accepted. Default: image/jpeg, image/png, image/gif, image/webp.
+        # allowlist for image_url data URIs. When set to a non-empty list,
+        # ONLY these types are accepted. An empty list accepts any type.
+        # Default: image/jpeg, image/png, image/gif, image/webp.
         # allowed_image_content_types:
         #   - image/jpeg
         #   - image/png

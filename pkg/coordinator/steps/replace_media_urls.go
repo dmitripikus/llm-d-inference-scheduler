@@ -542,14 +542,21 @@ var defaultAllowedContentTypesByModality = map[string]map[string]struct{}{
 
 // allowedContentTypeForModality reports whether contentType is allowed for
 // modality per the step's configured allowlist. MIME parameters
-// (";codecs=...", ";charset=..." and so on) are stripped before comparison, so a real
-// origin returning e.g. `video/mp4; codecs="avc1.4D401E"` matches the
-// bare `video/mp4` entry. Comparison is case-insensitive with whitespace
-// trimmed.
+// (";codecs=...", ";charset=..." and so on) are stripped before
+// comparison, so a real origin returning e.g. `video/mp4;
+// codecs="avc1.4D401E"` matches the bare `video/mp4` entry. Comparison
+// is case-insensitive with whitespace trimmed.
+//
+// A nil value for the modality means the operator opted out of the
+// per-modality allowlist (allowed_<modality>_content_types: []), and
+// any content type is accepted for that modality.
 func (s *ReplaceMediaURLsStep) allowedContentTypeForModality(contentType, modality string) bool {
 	allowed, ok := s.allowedContentTypes[modality]
 	if !ok {
 		return false
+	}
+	if allowed == nil {
+		return true
 	}
 	media, _, _ := strings.Cut(contentType, ";")
 	_, ok = allowed[strings.ToLower(strings.TrimSpace(media))]
@@ -612,6 +619,11 @@ var perModalityContentTypeParams = map[string]string{
 // modality whose config param is set. Each override is a list of MIME
 // strings; non-list roots or non-string entries are rejected so a
 // misconfiguration fails loudly instead of silently disabling the check.
+//
+// A present-but-empty list is used to mean "unrestricted for this
+// modality", matching allowed_domains's convention. That maps to a nil
+// value in the returned map, which allowedContentTypeForModality treats
+// as "accept anything".
 func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]struct{}, error) {
 	out := make(map[string]map[string]struct{}, len(defaultAllowedContentTypesByModality))
 	for mod, set := range defaultAllowedContentTypesByModality {
@@ -628,6 +640,11 @@ func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]
 		types, err := parseContentTypeSet(raw, key)
 		if err != nil {
 			return nil, err
+		}
+		if len(types) == 0 {
+			// Empty list = accept anything for this modality.
+			out[mod] = nil
+			continue
 		}
 		out[mod] = types
 	}

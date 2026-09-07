@@ -2125,6 +2125,33 @@ func TestReplaceMediaURLsStep_RejectsNonListAllowedContentTypes(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_AllowedContentTypes_EmptyMeansUnrestricted
+// asserts that setting allowed_<modality>_content_types to an empty list
+// disables the per-modality allowlist for that modality, so any type is
+// accepted. This mirrors the "empty means unrestricted" convention
+// allowed_domains uses.
+func TestReplaceMediaURLsStep_AllowedContentTypes_EmptyMeansUnrestricted(t *testing.T) {
+	step, err := NewReplaceMediaURLsStep(nil, map[string]any{
+		"allowed_video_content_types": []any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A type outside the built-in video allowlist (application/octet-stream)
+	// would normally be rejected. Under the unrestricted override it must
+	// be accepted.
+	reqCtx := &pipeline.RequestContext{Body: map[string]any{
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "data:application/octet-stream;base64,AAAA"}},
+			}},
+		},
+	}}
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("expected acceptance under empty video allowlist, got %v", err)
+	}
+}
+
 // TestParsePerModalityContentTypes_DoesNotAliasDefaults confirms that a
 // caller mutating the returned per-modality set cannot reach into the
 // package-level defaultAllowedContentTypesByModality: adding an entry to
