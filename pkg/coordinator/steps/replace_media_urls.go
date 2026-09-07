@@ -389,25 +389,23 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			}
 			// The inline "data" field already carries the base64 payload
 			// the backend needs, so the body passes through unmodified.
-			appendMultimodalEntry(reqCtx, ref.modality, contentType, ref.data)
+			appendMultimodalEntry(reqCtx, ref.modality)
 			continue
 		}
 		r := results[i]
 		if !strings.HasPrefix(ref.url, "data:") {
 			ref.urlMap["url"] = fmt.Sprintf("data:%s;base64,%s", r.contentType, r.base64Data)
 		}
-		appendMultimodalEntry(reqCtx, ref.modality, r.contentType, r.base64Data)
+		appendMultimodalEntry(reqCtx, ref.modality)
 	}
 
 	return nil
 }
 
-func appendMultimodalEntry(reqCtx *pipeline.RequestContext, modality, contentType, b64 string) {
+func appendMultimodalEntry(reqCtx *pipeline.RequestContext, modality string) {
 	reqCtx.MultimodalEntries = append(reqCtx.MultimodalEntries, pipeline.MultimodalEntry{
-		Index:       len(reqCtx.MultimodalEntries),
-		Modality:    modality,
-		Base64Data:  b64,
-		ContentType: contentType,
+		Index:    len(reqCtx.MultimodalEntries),
+		Modality: modality,
 	})
 }
 

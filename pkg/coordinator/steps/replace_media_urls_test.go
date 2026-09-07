@@ -89,12 +89,6 @@ func TestReplaceMediaURLsStep_DownloadsAndInlines(t *testing.T) {
 	if len(reqCtx.MultimodalEntries) != 1 {
 		t.Fatalf("expected 1 multimodal entry, got %d", len(reqCtx.MultimodalEntries))
 	}
-	if reqCtx.MultimodalEntries[0].ContentType != testImageJPEGMIME {
-		t.Fatalf("expected content type image/jpeg, got %s", reqCtx.MultimodalEntries[0].ContentType)
-	}
-	if reqCtx.MultimodalEntries[0].Base64Data == "" {
-		t.Fatal("expected Base64Data to be set")
-	}
 
 	msgs := reqCtx.Body["messages"].([]any)
 	content := msgs[0].(map[string]any)["content"].([]any)
@@ -193,13 +187,6 @@ func TestReplaceMediaURLsStep_DataURIInput(t *testing.T) {
 	if len(reqCtx.MultimodalEntries) != 1 {
 		t.Fatalf("expected 1 multimodal entry, got %d", len(reqCtx.MultimodalEntries))
 	}
-	got := reqCtx.MultimodalEntries[0]
-	if got.ContentType != testImageJPEGMIME {
-		t.Fatalf("expected content type image/jpeg, got %s", got.ContentType)
-	}
-	if got.Base64Data != "/9j/4AAQSkZJRg==" {
-		t.Fatalf("expected base64 payload preserved, got %q", got.Base64Data)
-	}
 
 	msgs := reqCtx.Body["messages"].([]any)
 	content := msgs[0].(map[string]any)["content"].([]any)
@@ -227,30 +214,21 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 	httpPart := map[string]any{"type": "image_url", "image_url": map[string]any{"url": httpURL}}
 	dataPart := map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURI}}
 
-	type want struct {
-		contentType string
-		base64Data  string
-	}
+	httpAsDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))
 	tests := []struct {
-		name  string
-		parts []any
-		want  []want
+		name     string
+		parts    []any
+		wantURLs []string
 	}{
 		{
-			name:  "http then data",
-			parts: []any{httpPart, dataPart},
-			want: []want{
-				{contentType: testImagePNGMIME, base64Data: base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))},
-				{contentType: testImageJPEGMIME, base64Data: "SU5MSU5F"},
-			},
+			name:     "http then data",
+			parts:    []any{httpPart, dataPart},
+			wantURLs: []string{httpAsDataURI, dataURI},
 		},
 		{
-			name:  "data then http",
-			parts: []any{dataPart, httpPart},
-			want: []want{
-				{contentType: testImageJPEGMIME, base64Data: "SU5MSU5F"},
-				{contentType: testImagePNGMIME, base64Data: base64.StdEncoding.EncodeToString([]byte("downloaded-image-bytes"))},
-			},
+			name:     "data then http",
+			parts:    []any{dataPart, httpPart},
+			wantURLs: []string{dataURI, httpAsDataURI},
 		},
 	}
 
@@ -268,19 +246,17 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 			if err := step.Execute(context.Background(), reqCtx); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if len(reqCtx.MultimodalEntries) != len(tt.want) {
-				t.Fatalf("expected %d multimodal entries, got %d", len(tt.want), len(reqCtx.MultimodalEntries))
+			if len(reqCtx.MultimodalEntries) != len(tt.wantURLs) {
+				t.Fatalf("expected %d multimodal entries, got %d", len(tt.wantURLs), len(reqCtx.MultimodalEntries))
 			}
-			for i, w := range tt.want {
-				got := reqCtx.MultimodalEntries[i]
-				if got.Index != i {
-					t.Errorf("entry[%d].Index = %d, want %d", i, got.Index, i)
+			for i, want := range tt.wantURLs {
+				if got := reqCtx.MultimodalEntries[i].Index; got != i {
+					t.Errorf("entry[%d].Index = %d, want %d", i, got, i)
 				}
-				if got.ContentType != w.contentType {
-					t.Errorf("entry[%d].ContentType = %q, want %q", i, got.ContentType, w.contentType)
-				}
-				if got.Base64Data != w.base64Data {
-					t.Errorf("entry[%d].Base64Data = %q, want %q", i, got.Base64Data, w.base64Data)
+				content := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+				gotURL := content[i].(map[string]any)["image_url"].(map[string]any)["url"].(string)
+				if gotURL != want {
+					t.Errorf("content[%d] url = %q, want %q", i, gotURL, want)
 				}
 			}
 		})
@@ -481,9 +457,11 @@ func TestReplaceMediaURLsStep_MultipleImages(t *testing.T) {
 	if len(reqCtx.MultimodalEntries) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(reqCtx.MultimodalEntries))
 	}
-	for i, entry := range reqCtx.MultimodalEntries {
-		if entry.Base64Data == "" {
-			t.Fatalf("entry %d: expected Base64Data to be set", i)
+	content := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	for i, part := range content {
+		url, _ := part.(map[string]any)["image_url"].(map[string]any)["url"].(string)
+		if !strings.HasPrefix(url, "data:image/png;base64,") {
+			t.Fatalf("part %d not inlined: %s", i, url)
 		}
 	}
 }
@@ -621,8 +599,11 @@ func TestReplaceMediaURLsStep_EmptyContentType(t *testing.T) {
 	if len(reqCtx.MultimodalEntries) != 1 {
 		t.Fatalf("expected 1 multimodal entry, got %d", len(reqCtx.MultimodalEntries))
 	}
-	if reqCtx.MultimodalEntries[0].ContentType != defaultContentType {
-		t.Fatalf("expected %s, got %q", defaultContentType, reqCtx.MultimodalEntries[0].ContentType)
+	// The rewritten data URI carries the fallback type.
+	part := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	url, _ := part["image_url"].(map[string]any)["url"].(string)
+	if !strings.HasPrefix(url, "data:"+defaultContentType+";base64,") {
+		t.Fatalf("expected url with default type, got %s", url)
 	}
 }
 
@@ -779,8 +760,12 @@ func TestReplaceMediaURLsStep_AllowsBodyAtCap(t *testing.T) {
 	if len(reqCtx.MultimodalEntries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(reqCtx.MultimodalEntries))
 	}
-	if want := base64.StdEncoding.EncodeToString(make([]byte, capBytes)); reqCtx.MultimodalEntries[0].Base64Data != want {
-		t.Fatalf("entry data mismatch: got %q want %q", reqCtx.MultimodalEntries[0].Base64Data, want)
+	// The rewritten data URI carries the exact cap-sized payload.
+	part := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	url, _ := part["image_url"].(map[string]any)["url"].(string)
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, capBytes))
+	if url != want {
+		t.Fatalf("url mismatch: got %q want %q", url, want)
 	}
 }
 
@@ -1185,9 +1170,6 @@ func TestReplaceMediaURLsStep_AudioURL_Downloads(t *testing.T) {
 	if reqCtx.MultimodalEntries[0].Modality != ModalityAudio {
 		t.Fatalf("expected Modality=%q, got %q", ModalityAudio, reqCtx.MultimodalEntries[0].Modality)
 	}
-	if reqCtx.MultimodalEntries[0].ContentType != testAudioWAVMIME {
-		t.Fatalf("expected content type audio/wav, got %s", reqCtx.MultimodalEntries[0].ContentType)
-	}
 	msgs := reqCtx.Body["messages"].([]any)
 	inner := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["audio_url"].(map[string]any)
 	url := inner["url"].(string)
@@ -1228,9 +1210,6 @@ func TestReplaceMediaURLsStep_ImageURL_ParameterOnlyContentType(t *testing.T) {
 	if err := step.Execute(context.Background(), reqCtx); err != nil {
 		t.Fatalf("expected acceptance with fallback content type, got %v", err)
 	}
-	if got := reqCtx.MultimodalEntries[0].ContentType; got != defaultContentType {
-		t.Errorf("MultimodalEntries[0].ContentType = %q, want fallback %q", got, defaultContentType)
-	}
 	part := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
 	rewritten, _ := part["image_url"].(map[string]any)["url"].(string)
 	if !strings.HasPrefix(rewritten, "data:"+defaultContentType+";base64,") {
@@ -1240,11 +1219,11 @@ func TestReplaceMediaURLsStep_ImageURL_ParameterOnlyContentType(t *testing.T) {
 
 // TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams asserts
 // that a real audio_url / video_url whose origin returns a Content-Type
-// with MIME parameters (";codecs=...", ";charset=..." and so on) is accepted, and that
-// the parameters are stripped at the download boundary so the rewritten
-// data URI and MultimodalEntry.ContentType both carry a bare MIME. The
-// codecs case embeds a comma inside a quoted parameter value, which is
-// what breaks parseDataURI when the raw header value flows through.
+// with MIME parameters (";codecs=...", ";charset=..." and so on) is
+// accepted, and that the parameters are stripped at the download
+// boundary so the rewritten data URI carries a bare MIME. The codecs
+// case embeds a comma inside a quoted parameter value, which is what
+// breaks parseDataURI when the raw header value flows through.
 func TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -1285,12 +1264,6 @@ func TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams(t *testing
 			}
 			if got := len(reqCtx.MultimodalEntries); got != 1 {
 				t.Fatalf("expected 1 entry, got %d", got)
-			}
-			// MultimodalEntry.ContentType must be the bare media type, not
-			// the raw header, so the encoder's wire contract sees a clean
-			// value.
-			if got := reqCtx.MultimodalEntries[0].ContentType; got != tc.wantMediaType {
-				t.Errorf("MultimodalEntries[0].ContentType = %q, want bare %q", got, tc.wantMediaType)
 			}
 			// The rewritten URL must round-trip through parseDataURI. When
 			// the header carries a parameter value containing a comma, the
@@ -1551,12 +1524,6 @@ func TestReplaceMediaURLsStep_InputAudio_Valid(t *testing.T) {
 	entry := reqCtx.MultimodalEntries[0]
 	if entry.Modality != ModalityAudio {
 		t.Fatalf("expected Modality=%q, got %q", ModalityAudio, entry.Modality)
-	}
-	if entry.ContentType != testAudioWAVMIME {
-		t.Fatalf("expected content type audio/wav, got %s", entry.ContentType)
-	}
-	if entry.Base64Data != "UklGRg==" {
-		t.Fatalf("expected Base64Data == payload, got %q", entry.Base64Data)
 	}
 	msgs := reqCtx.Body["messages"].([]any)
 	inner := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["input_audio"].(map[string]any)
@@ -1823,21 +1790,16 @@ func TestReplaceMediaURLsStep_MixedAudio_WalkerOrder(t *testing.T) {
 	if got := len(reqCtx.MultimodalEntries); got != 2 {
 		t.Fatalf("expected 2 audio entries, got %d", got)
 	}
-	// Entry 0 must be the inline part, entry 1 must be the URL part.
-	if reqCtx.MultimodalEntries[0].Base64Data != inlineData {
-		t.Errorf("entries[0].Base64Data = %q, want the inline payload %q",
-			reqCtx.MultimodalEntries[0].Base64Data, inlineData)
-	}
-	if reqCtx.MultimodalEntries[0].ContentType != testAudioWAVMIME {
-		t.Errorf("entries[0].ContentType = %q, want audio/wav (from input_audio format)",
-			reqCtx.MultimodalEntries[0].ContentType)
-	}
-	if reqCtx.MultimodalEntries[1].Base64Data == inlineData {
-		t.Errorf("entries[1].Base64Data still equals A's payload; walker order was not preserved")
-	}
-	// The URL slot must have been overwritten in place with the downloaded
-	// data URI (empty original url replaced by "data:...").
+	// The inline part's input_audio.data must be untouched, and the URL
+	// slot must have been overwritten in place with the downloaded data
+	// URI. Together with the collectMediaParts check below, this
+	// verifies that entry 0 corresponds to the inline part and entry 1
+	// to the URL part.
 	msgs := reqCtx.Body["messages"].([]any)
+	inlinePart := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)["input_audio"].(map[string]any)
+	if got, _ := inlinePart["data"].(string); got != inlineData {
+		t.Errorf("input_audio data changed: got %q, want %q", got, inlineData)
+	}
 	urlPart := msgs[0].(map[string]any)["content"].([]any)[1].(map[string]any)["audio_url"].(map[string]any)
 	if got, _ := urlPart["url"].(string); !strings.HasPrefix(got, "data:audio/wav;base64,") {
 		t.Errorf("audio_url url = %q, want inlined data URI", got)
