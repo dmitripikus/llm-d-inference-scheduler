@@ -224,7 +224,9 @@ func (s *EncodeStep) buildEncodeTokenIDs(fullTokenIDs []int, entry pipeline.Mult
 // entry's pairing coordinates, both resolved once by Execute: mod is the
 // entry's modality per entryModality, localIdx its position among the entries
 // sharing that modality. Taking mod as a parameter rather than recomputing it
-// keeps entryModality's empty-Modality error log to one line per entry.
+// keeps entryModality's empty-Modality error log to one line per entry within
+// this step. Other steps resolve the same entry themselves and log their own
+// line, so a request carrying such an entry reports it once per step.
 func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, mod string, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any) (map[string]any, error) {
 	placeholder := map[string]any{"offset": 1, "length": entry.Placeholder.Length}
 	switch format {
