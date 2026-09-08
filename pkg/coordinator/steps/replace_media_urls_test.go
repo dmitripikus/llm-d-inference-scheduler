@@ -1416,6 +1416,90 @@ func TestReplaceMediaURLsStep_ImageURL_ParameterOnlyContentType(t *testing.T) {
 	}
 }
 
+// TestNormalizeMediaType covers what a Content-Type header or a data URI
+// media type is reduced to before it reaches the allowlist or the emitted
+// URI. The comma cases are the ones that matter for the emitted URI: RFC 2397
+// ends the metadata at the first comma, so a type that kept one would move the
+// payload boundary.
+func TestNormalizeMediaType(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"image/png", "image/png"},
+		{"IMAGE/PNG", "image/png"},
+		{"  image/png  ", "image/png"},
+		{"image/png; charset=utf-8", "image/png"},
+		{`video/mp4; codecs="avc1.4D401E"`, "video/mp4"},
+		{"image/png, image/png", "image/png"},
+		{"image/png,image/jpeg", "image/png"},
+		{`video/mp4; codecs="avc1.4D401E, mp4a.40.2"`, "video/mp4"},
+		{"", ""},
+		{"; charset=utf-8", ""},
+		{", image/png", ""},
+	}
+	for _, tc := range tests {
+		if got := normalizeMediaType(tc.in); got != tc.want {
+			t.Errorf("normalizeMediaType(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestReplaceMediaURLsStep_ImageURL_MultiValueContentType covers an origin
+// whose Content-Type holds more than one value. The comma must not reach the
+// rewritten data URI: a reader splitting on the first comma would take
+// "image/png" as the whole metadata and " image/png;base64,..." as the
+// payload, and the base64 decode would fail.
+func TestReplaceMediaURLsStep_ImageURL_MultiValueContentType(t *testing.T) {
+	data := []byte("png-bytes")
+	oddServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", testImagePNGMIME+", "+testImagePNGMIME)
+		_, _ = w.Write(data)
+	}))
+	defer oddServer.Close()
+
+	step := newLoopbackStep(t, map[string]any{"download_timeout": "5s"})
+	reqCtx := &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":      "image_url",
+							"image_url": map[string]any{"url": oddServer.URL + "/thing.png"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	part := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	rewritten, _ := part["image_url"].(map[string]any)["url"].(string)
+	want := "data:" + testImagePNGMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
+	if rewritten != want {
+		t.Fatalf("rewritten url = %q, want %q", rewritten, want)
+	}
+	// The URI must survive a round trip through the step's own reader.
+	ct, b64, err := parseDataURI(rewritten)
+	if err != nil {
+		t.Fatalf("parseDataURI on the rewritten URI: %v", err)
+	}
+	if ct != testImagePNGMIME {
+		t.Errorf("round-tripped content type = %q, want %q", ct, testImagePNGMIME)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("decoding the round-tripped payload: %v", err)
+	}
+	if string(decoded) != string(data) {
+		t.Errorf("round-tripped payload = %q, want %q", decoded, data)
+	}
+}
+
 // TestReplaceMediaURLsStep_AudioVideo_AcceptsContentTypeWithParams asserts
 // that a real audio_url / video_url whose origin returns a Content-Type
 // with MIME parameters (";codecs=...", ";charset=..." and so on) is

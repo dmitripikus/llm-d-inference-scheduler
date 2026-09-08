@@ -121,6 +121,29 @@ func mediaPartIsWellFormed(partMap map[string]any, partType string) bool {
 
 const defaultContentType = "application/octet-stream"
 
+// normalizeMediaType reduces a Content-Type header value or a data URI media
+// type to the bare type, lowercased and trimmed. Everything from the first
+// ";" (MIME parameters such as codecs= or charset=) or the first "," is
+// dropped, and the result is what both the allowlist lookup and the emitted
+// data URI use.
+//
+// Cutting at the comma keeps the emitted URI parseable. RFC 2397 ends the
+// metadata at the first comma, so a type carrying one (a header holding more
+// than one value, or a codec list) would move the payload boundary and hand
+// the reader a truncated media type with the rest of the metadata prepended
+// to the base64.
+//
+// Returns "" for an empty value and for one that is only parameters
+// ("; charset=utf-8"). Callers that need a type substitute defaultContentType,
+// which keeps the empty case off the wire: "data:;base64,..." has no media
+// type at all.
+func normalizeMediaType(raw string) string {
+	if i := strings.IndexAny(raw, ";,"); i >= 0 {
+		raw = raw[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
 // dataURIPrefix is the scheme prefix of a data URI. RFC 2397 scheme names
 // are case-insensitive, so every comparison against it goes through
 // isDataURI rather than strings.HasPrefix.
@@ -532,21 +555,10 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 	if int64(len(data)) > sizeCap {
 		return nil, "", fmt.Errorf("response too large: body exceeds max %d: %w", sizeCap, pipeline.ErrBadRequest)
 	}
-	// Take the type off the front of the Content-Type header (drop
-	// anything after the first ";", like "codecs=..." or "charset=...")
-	// and lowercase/trim it. This matches what parseDataURI does, so
-	// the allowlist check, the rewritten data URI, and MultimodalEntry
-	// all see the same clean type. Without this, a codec list can
-	// contain a comma, and parseDataURI splits on the first comma,
-	// which breaks the URL.
-	//
-	// Strip first, then fall back to defaultContentType. That way both
-	// an empty header AND a header that is just parameters (like
-	// "; charset=utf-8", which strips to "") end up on the default. If
-	// we fell back first, the empty type would flow through and the
-	// emitted URL would look like data:;base64,...
-	media, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
-	contentType := strings.ToLower(strings.TrimSpace(media))
+	// Normalize before falling back to defaultContentType, so a header that
+	// is only parameters ("; charset=utf-8") lands on the default the same
+	// way an absent header does.
+	contentType := normalizeMediaType(resp.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = defaultContentType
 	}
@@ -634,11 +646,9 @@ var defaultAllowedContentTypesByModality = map[string]map[string]struct{}{
 }
 
 // allowedContentTypeForModality reports whether contentType is allowed for
-// modality per the step's configured allowlist. MIME parameters
-// (";codecs=...", ";charset=..." and so on) are stripped before
-// comparison, so a real origin returning e.g. `video/mp4;
-// codecs="avc1.4D401E"` matches the bare `video/mp4` entry. Comparison
-// is case-insensitive with whitespace trimmed.
+// modality per the step's configured allowlist. contentType must already be
+// normalized by normalizeMediaType, which every caller uses, so the lookup is
+// a plain map hit against the allowlist's normalized keys.
 //
 // A nil value for the modality means the operator opted out of the
 // per-modality allowlist (allowed_<modality>_content_types: []), and
@@ -651,8 +661,7 @@ func (s *ReplaceMediaURLsStep) allowedContentTypeForModality(contentType, modali
 	if allowed == nil {
 		return true
 	}
-	media, _, _ := strings.Cut(contentType, ";")
-	_, ok = allowed[strings.ToLower(strings.TrimSpace(media))]
+	_, ok = allowed[contentType]
 	return ok
 }
 
@@ -803,7 +812,9 @@ func parseContentTypeSet(raw any, fieldName string) (map[string]struct{}, error)
 		if !ok {
 			return nil, fmt.Errorf("%s entries must be strings, got %T", fieldName, e)
 		}
-		set[strings.ToLower(strings.TrimSpace(mime))] = struct{}{}
+		// Same normalization the checked types get, so an entry written with
+		// a parameter attached still matches the bare type it names.
+		set[normalizeMediaType(mime)] = struct{}{}
 	}
 	return set, nil
 }
@@ -849,10 +860,11 @@ func parseDataURI(uri string) (contentType, b64 string, err error) {
 	if !hasBase64 {
 		return "", "", errors.New("data URI must be base64-encoded")
 	}
-	if ct == "" {
+	contentType = normalizeMediaType(ct)
+	if contentType == "" {
 		return "", "", errors.New("data URI missing media type")
 	}
-	return strings.ToLower(strings.TrimSpace(ct)), payload, nil
+	return contentType, payload, nil
 }
 
 // addressGuard enforces SSRF protections for outbound image downloads. The IP
