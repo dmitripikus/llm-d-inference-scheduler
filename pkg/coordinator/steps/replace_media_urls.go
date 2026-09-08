@@ -95,6 +95,19 @@ func mediaPartIsWellFormed(partMap map[string]any, partType string) bool {
 
 const defaultContentType = "application/octet-stream"
 
+// dataURIPrefix is the scheme prefix of a data URI. RFC 2397 scheme names
+// are case-insensitive, so every comparison against it goes through
+// isDataURI rather than strings.HasPrefix.
+const dataURIPrefix = "data:"
+
+// isDataURI reports whether s carries the data: scheme, ignoring case.
+// A case-sensitive check would send "DATA:image/png;base64,..." down the
+// download path, where url.Parse reports scheme "DATA" (Go does not
+// normalize it) and the scheme guard rejects the request.
+func isDataURI(s string) bool {
+	return len(s) >= len(dataURIPrefix) && strings.EqualFold(s[:len(dataURIPrefix)], dataURIPrefix)
+}
+
 // defaultMaxDownloadSize is the default cap for max_download_size, in megabytes.
 const defaultMaxDownloadSize = 10 // 10 MB
 
@@ -340,7 +353,7 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			continue
 		}
 		urlCount++
-		if strings.HasPrefix(ref.url, "data:") {
+		if isDataURI(ref.url) {
 			contentType, b64, err := parseDataURI(ref.url)
 			if err != nil {
 				return fmt.Errorf("parsing data URI at message %d part %d: %w: %w", ref.msgIdx, ref.partIdx, err, pipeline.ErrBadRequest)
@@ -395,7 +408,7 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			continue
 		}
 		r := results[i]
-		if !strings.HasPrefix(ref.url, "data:") {
+		if !isDataURI(ref.url) {
 			ref.urlMap["url"] = fmt.Sprintf("data:%s;base64,%s", r.contentType, r.base64Data)
 		}
 		appendMultimodalEntry(reqCtx, ref.modality)
@@ -419,10 +432,14 @@ func (s *ReplaceMediaURLsStep) validateInlineAudio(ref mediaRef) error {
 		return fmt.Errorf("input_audio content type %q not allowed at message %d part %d: %w",
 			contentType, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 	}
-	// Padded base64 for n bytes has length 4 * ceil(n/3). Compute the cap
-	// and reject when the string alone exceeds it, so an oversized payload
-	// is caught before decoding. input_audio size is bounded by the
-	// audio-modality cap.
+	// Reject on the length of the base64 string, before decoding, so an
+	// oversized payload is never allocated. maxBase64Len is the encoded
+	// length of a sizeCap-byte payload (padded base64 for n bytes is
+	// 4 * ceil(n/3) chars). It is an allocation bound, not a byte-exact
+	// limit: when sizeCap is not a multiple of 3, a string right at the
+	// bound decodes to up to 2 bytes over. That slack is fine, bounding
+	// the allocation is the point. input_audio is capped by the audio
+	// modality.
 	sizeCap := s.downloadSizeFor(ref.modality)
 	maxBase64Len := 4 * ((sizeCap + 2) / 3)
 	if int64(len(ref.data)) > maxBase64Len {
@@ -759,7 +776,10 @@ func audioFormatToMIME(format string) (string, error) {
 }
 
 func parseDataURI(uri string) (contentType, b64 string, err error) {
-	rest := strings.TrimPrefix(uri, "data:")
+	rest := uri
+	if isDataURI(rest) {
+		rest = rest[len(dataURIPrefix):]
+	}
 	meta, payload, ok := strings.Cut(rest, ",")
 	if !ok {
 		return "", "", errors.New("missing comma in data URI")

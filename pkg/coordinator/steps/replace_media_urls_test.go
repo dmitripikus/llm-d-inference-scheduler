@@ -196,6 +196,44 @@ func TestReplaceMediaURLsStep_DataURIInput(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_UppercaseDataURIScheme covers an uppercase
+// data: scheme, which RFC 2397 allows. It must be recognized as inline
+// data and left alone. A case-sensitive prefix check would send it to the
+// download path, where the scheme guard rejects "DATA" outright.
+func TestReplaceMediaURLsStep_UppercaseDataURIScheme(t *testing.T) {
+	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{})
+
+	const dataURI = "DATA:image/png;base64,iVBORw0KGgo="
+	reqCtx := &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":      "image_url",
+							"image_url": map[string]any{"url": dataURI},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("expected uppercase data: scheme accepted, got %v", err)
+	}
+	if len(reqCtx.MultimodalEntries) != 1 {
+		t.Fatalf("expected 1 multimodal entry, got %d", len(reqCtx.MultimodalEntries))
+	}
+	msgs := reqCtx.Body["messages"].([]any)
+	content := msgs[0].(map[string]any)["content"].([]any)
+	imgPart := content[0].(map[string]any)["image_url"].(map[string]any)
+	if imgPart["url"].(string) != dataURI {
+		t.Fatalf("expected url unchanged, got %s", imgPart["url"])
+	}
+}
+
 // MultimodalEntry.Index must reflect the position of each image in the
 // request, regardless of whether it came from a download or an inline
 // data: URI. EncodeStep.buildSingleImageContent indexes by entry.Index so
@@ -291,6 +329,12 @@ func TestParseDataURI(t *testing.T) {
 		{
 			name:        "content type normalized to lowercase and trimmed",
 			uri:         "data:IMAGE/PNG ;base64,iVBORw0K",
+			wantType:    testImagePNGMIME,
+			wantPayload: "iVBORw0K",
+		},
+		{
+			name:        "uppercase scheme",
+			uri:         "DATA:image/png;base64,iVBORw0K",
 			wantType:    testImagePNGMIME,
 			wantPayload: "iVBORw0K",
 		},
