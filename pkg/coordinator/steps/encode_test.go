@@ -106,9 +106,9 @@ func TestEncodeStep_ParallelFanOut(t *testing.T) {
 		Model:     testModelName,
 		TokenIDs:  []int{1, 32000, 32000, 32000, 32000, 32000, 32000, 2345},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "hash-a", KwargsData: "dGVuc29yLWE=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
-			{Hash: "hash-b", KwargsData: "dGVuc29yLWI=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
-			{Hash: "hash-c", KwargsData: "dGVuc29yLWM=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash-a", KwargsData: "dGVuc29yLWE=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash-b", KwargsData: "dGVuc29yLWI=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash-c", KwargsData: "dGVuc29yLWM=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
 		},
 	}
 
@@ -184,7 +184,7 @@ func TestEncodeStep_SkipsInvalidECTransferParams(t *testing.T) {
 				Model:     testModelName,
 				TokenIDs:  []int{1, 32000, 32000, 2345},
 				MultimodalEntries: []pipeline.MultimodalEntry{
-					{Hash: "hash-a", KwargsData: "dGVuc29yLWE=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+					{Modality: ModalityImage, Hash: "hash-a", KwargsData: "dGVuc29yLWE=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 				},
 			}
 
@@ -231,9 +231,9 @@ func TestEncodeStep_PartialFailure(t *testing.T) {
 		Model:     "test",
 		TokenIDs:  []int{1, 32000, 32000, 32000},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "h1", KwargsData: "dDE=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
-			{Hash: "h2", KwargsData: "dDI=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
-			{Hash: "h3", KwargsData: "dDM=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "h1", KwargsData: "dDE=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "h2", KwargsData: "dDI=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "h3", KwargsData: "dDM=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 		},
 	}
 
@@ -295,7 +295,7 @@ func TestEncodeStep_ChatCompletionsFormat(t *testing.T) {
 			},
 		},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "hash-x", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash-x", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 		},
 	}
 
@@ -396,7 +396,7 @@ func TestEncodeStep_ChatCompletionsFormat_OmitsMaxCompletionTokens(t *testing.T)
 			},
 		},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "hash-b", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash-b", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 		},
 	}
 
@@ -471,7 +471,7 @@ func TestEncodeStep_SkipsForGenerate(t *testing.T) {
 		OriginalPath: gateway.DefaultGeneratePath,
 		TokenIDs:     []int{1, 32000, 32000, 2},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "hash-a", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
+			{Modality: ModalityImage, Hash: "hash-a", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
 		},
 	}
 
@@ -515,8 +515,8 @@ func TestEncodeStep_EncoderReturnsNoECParams(t *testing.T) {
 		Model:     "test-model",
 		TokenIDs:  []int{1, 32000, 32000, 2},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "hash-a", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
-			{Hash: "hash-b", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
+			{Modality: ModalityImage, Hash: "hash-a", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
+			{Modality: ModalityImage, Hash: "hash-b", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
 		},
 	}
 
@@ -559,7 +559,7 @@ func TestEncodeStep_BuildsCorrectTokenIDs(t *testing.T) {
 		Model:     "test",
 		TokenIDs:  []int{1, 32000, 32000, 32000, 2345, 6789},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "h1", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "h1", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 		},
 	}
 
@@ -608,7 +608,7 @@ func TestEncodeStep_GenerateFormat_CapsSingleToken(t *testing.T) {
 		Model:     "test",
 		TokenIDs:  []int{1, 32000, 32000, 32000, 2345},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Hash: "h1", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "h1", KwargsData: "dGVzdA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 		},
 	}
 

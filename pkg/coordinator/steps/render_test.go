@@ -69,8 +69,8 @@ func TestRenderStep_ParsesFullResponse(t *testing.T) {
 		Body:         map[string]any{"model": "gpt-4o", "messages": []any{}},
 		Model:        "gpt-4o",
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{},
-			{},
+			{Modality: ModalityImage},
+			{Modality: ModalityImage},
 		},
 	}
 
@@ -430,8 +430,8 @@ func TestRenderStep_RejectsTooManyPlaceholderTokens(t *testing.T) {
 		OriginalPath: gateway.PathChatCompletions,
 		Body:         map[string]any{"model": "test"},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{},
-			{},
+			{Modality: ModalityImage},
+			{Modality: ModalityImage},
 		},
 	}
 
@@ -466,7 +466,7 @@ func TestRenderStep_AllowsAtPlaceholderLimit(t *testing.T) {
 	reqCtx := &pipeline.RequestContext{
 		OriginalPath:      gateway.PathChatCompletions,
 		Body:              map[string]any{"model": "test"},
-		MultimodalEntries: []pipeline.MultimodalEntry{{}},
+		MultimodalEntries: []pipeline.MultimodalEntry{{Modality: ModalityImage}},
 	}
 
 	if err := step.Execute(context.Background(), reqCtx); err != nil {
@@ -484,8 +484,8 @@ func TestRenderStep_PlaceholderLimitOverflow(t *testing.T) {
 	// Two lengths whose sum overflows int and wraps negative. Without the
 	// overflow guard, total > max is false and the limit is silently bypassed.
 	entries := []pipeline.MultimodalEntry{
-		{Placeholder: pipeline.PlaceholderRange{Length: math.MaxInt}},
-		{Placeholder: pipeline.PlaceholderRange{Length: math.MaxInt}},
+		{Modality: ModalityImage, Placeholder: pipeline.PlaceholderRange{Length: math.MaxInt}},
+		{Modality: ModalityImage, Placeholder: pipeline.PlaceholderRange{Length: math.MaxInt}},
 	}
 	err = rs.checkPlaceholderLimit(entries)
 	if err == nil {
@@ -521,7 +521,7 @@ func TestRenderStep_ServiceError(t *testing.T) {
 	reqCtx := &pipeline.RequestContext{
 		OriginalPath:      gateway.PathChatCompletions,
 		Body:              map[string]any{"model": "test"},
-		MultimodalEntries: []pipeline.MultimodalEntry{{}},
+		MultimodalEntries: []pipeline.MultimodalEntry{{Modality: ModalityImage}},
 	}
 
 	err := step.Execute(context.Background(), reqCtx)
