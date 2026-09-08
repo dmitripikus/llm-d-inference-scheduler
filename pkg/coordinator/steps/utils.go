@@ -159,7 +159,7 @@ var errEmptyModality = errors.New("MultimodalEntry has empty Modality, defaultin
 func entryModality(entry pipeline.MultimodalEntry, logger logr.Logger) string {
 	if entry.Modality == "" {
 		logger.Error(errEmptyModality, "unexpected multimodal entry",
-			"hash", entry.Hash, "index", entry.Index)
+			"hash", entry.Hash)
 		return ModalityImage
 	}
 	return entry.Modality
@@ -440,7 +440,6 @@ func extractMultimodalEntries(features map[string]any) ([]pipeline.MultimodalEnt
 			}
 
 			entries = append(entries, pipeline.MultimodalEntry{
-				Index:      len(entries),
 				Modality:   mod,
 				Hash:       hash,
 				KwargsData: kwarg,

@@ -448,7 +448,6 @@ func (s *ReplaceMediaURLsStep) validateInlineAudio(ref mediaRef) error {
 
 func appendMultimodalEntry(reqCtx *pipeline.RequestContext, modality string) {
 	reqCtx.MultimodalEntries = append(reqCtx.MultimodalEntries, pipeline.MultimodalEntry{
-		Index:    len(reqCtx.MultimodalEntries),
 		Modality: modality,
 	})
 }

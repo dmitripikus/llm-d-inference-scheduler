@@ -123,7 +123,7 @@ func TestDecodeStep_NonStreaming(t *testing.T) {
 		Stream:       false,
 		TokenIDs:     []int{1, 32000, 32000, 32000, 2345},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage, Hash: "hash-a", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash-a", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
 		},
 		KVTransferParams: map[string]any{"block_id": "xyz", "peer_host": "10.0.0.5", "peer_port": 7777},
 		Body: map[string]any{
@@ -302,7 +302,7 @@ func TestDecodeStep_Streaming(t *testing.T) {
 		Model:        "test",
 		Stream:       true,
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage, Hash: "h1"},
+			{Modality: ModalityImage, Hash: "h1"},
 		},
 		KVTransferParams: map[string]any{},
 		Body:             map[string]any{"model": "test", "stream": true},
@@ -347,7 +347,7 @@ func TestDecodeStep_GatewayError(t *testing.T) {
 		Model:        "test",
 		Stream:       false,
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage, Hash: "h1"},
+			{Modality: ModalityImage, Hash: "h1"},
 		},
 		KVTransferParams: map[string]any{},
 		Body:             map[string]any{"model": "test", "stream": false},
@@ -473,10 +473,10 @@ func TestInjectUUIDs_TagsAllMediaParts(t *testing.T) {
 			},
 		},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage, Hash: "H-img"},
-			{Index: 1, Modality: ModalityAudio, Hash: "H-aud-url"},
-			{Index: 2, Modality: ModalityVideo, Hash: "H-vid"},
-			{Index: 3, Modality: ModalityAudio, Hash: "H-input-audio"},
+			{Modality: ModalityImage, Hash: "H-img"},
+			{Modality: ModalityAudio, Hash: "H-aud-url"},
+			{Modality: ModalityVideo, Hash: "H-vid"},
+			{Modality: ModalityAudio, Hash: "H-input-audio"},
 		},
 	}
 	step.injectUUIDs(reqCtx, logr.Discard())
@@ -512,8 +512,8 @@ func TestInjectUUIDs_TagsRepeatedModalityInOrder(t *testing.T) {
 			},
 		},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityAudio, Hash: "H0"},
-			{Index: 1, Modality: ModalityAudio, Hash: "H1"},
+			{Modality: ModalityAudio, Hash: "H0"},
+			{Modality: ModalityAudio, Hash: "H1"},
 		},
 	}
 	step.injectUUIDs(reqCtx, logr.Discard())
@@ -547,8 +547,8 @@ func TestInjectUUIDs_SkipsMalformedParts(t *testing.T) {
 			},
 		},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage, Hash: "H-img"},
-			{Index: 1, Modality: ModalityAudio, Hash: "H-aud"},
+			{Modality: ModalityImage, Hash: "H-img"},
+			{Modality: ModalityAudio, Hash: "H-aud"},
 		},
 	}
 	step.injectUUIDs(reqCtx, logr.Discard())

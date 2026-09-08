@@ -237,9 +237,6 @@ func TestExtractMultimodalEntries(t *testing.T) {
 		if e.KwargsData != "tensordata" {
 			t.Errorf("kwargs: expected tensordata, got %v", e.KwargsData)
 		}
-		if e.Index != 0 {
-			t.Errorf("index: expected 0, got %v", e.Index)
-		}
 	})
 
 	t.Run("valid_two_images", func(t *testing.T) {
@@ -259,8 +256,8 @@ func TestExtractMultimodalEntries(t *testing.T) {
 			t.Fatalf("expected 2 entries, got %d", len(entries))
 		}
 		want := []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage, Hash: "hash1", KwargsData: "d1", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
-			{Index: 1, Modality: ModalityImage, Hash: "hash2", KwargsData: "d2", Placeholder: pipeline.PlaceholderRange{Offset: 5, Length: 2}},
+			{Modality: ModalityImage, Hash: "hash1", KwargsData: "d1", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 3}},
+			{Modality: ModalityImage, Hash: "hash2", KwargsData: "d2", Placeholder: pipeline.PlaceholderRange{Offset: 5, Length: 2}},
 		}
 		for i, w := range want {
 			if entries[i] != w {
@@ -625,13 +622,13 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 // supports audio and video alongside image.
 func TestBuildMMFeatures_GroupsByModality(t *testing.T) {
 	entries := []pipeline.MultimodalEntry{
-		{Index: 0, Modality: ModalityImage, Hash: "img-a", KwargsData: "k-img-a",
+		{Modality: ModalityImage, Hash: "img-a", KwargsData: "k-img-a",
 			Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
-		{Index: 1, Modality: ModalityAudio, Hash: "aud-a", KwargsData: "k-aud-a",
+		{Modality: ModalityAudio, Hash: "aud-a", KwargsData: "k-aud-a",
 			Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
-		{Index: 2, Modality: ModalityImage, Hash: "img-b", KwargsData: "",
+		{Modality: ModalityImage, Hash: "img-b", KwargsData: "",
 			Placeholder: pipeline.PlaceholderRange{Offset: 8, Length: 1}},
-		{Index: 3, Modality: ModalityVideo, Hash: "vid-a", KwargsData: "k-vid-a",
+		{Modality: ModalityVideo, Hash: "vid-a", KwargsData: "k-vid-a",
 			Placeholder: pipeline.PlaceholderRange{Offset: 10, Length: 5}},
 	}
 	features := buildMMFeatures(entries, true, logr.Discard())
@@ -668,7 +665,7 @@ func TestBuildMMFeatures_GroupsByModality(t *testing.T) {
 // after the entry had been grouped under the wrong modality.
 func TestEntryModality_EmptyLogsError(t *testing.T) {
 	sink := &logCaptureSink{}
-	entry := pipeline.MultimodalEntry{Index: 3, Hash: "h3"}
+	entry := pipeline.MultimodalEntry{Hash: "h3"}
 
 	if got := entryModality(entry, logr.New(sink)); got != ModalityImage {
 		t.Errorf("entryModality = %q, want %q", got, ModalityImage)
@@ -735,12 +732,6 @@ func TestExtractMultimodalEntries_MultiModalityResponse(t *testing.T) {
 	}
 	if entries[2].Modality != ModalityImage || entries[2].Hash != "img-b" {
 		t.Errorf("entries[2] = (%q, %q), want (image, img-b)", entries[2].Modality, entries[2].Hash)
-	}
-	// Index is the flat position, not per-modality.
-	for i, e := range entries {
-		if e.Index != i {
-			t.Errorf("entries[%d].Index = %d, want %d", i, e.Index, i)
-		}
 	}
 }
 

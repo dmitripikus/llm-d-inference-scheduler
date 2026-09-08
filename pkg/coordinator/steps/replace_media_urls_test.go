@@ -234,11 +234,12 @@ func TestReplaceMediaURLsStep_UppercaseDataURIScheme(t *testing.T) {
 	}
 }
 
-// MultimodalEntry.Index must reflect the position of each image in the
-// request, regardless of whether it came from a download or an inline
-// data: URI. EncodeStep.buildSingleImageContent indexes by entry.Index so
-// drift would associate hashes/placeholders with the wrong image. Asserted
-// in both source orderings.
+// One MultimodalEntry must be appended per media part, in request order,
+// regardless of whether the part came from a download or an inline data: URI.
+// The encode fanout and decode.injectUUIDs pair the Nth entry of a modality
+// with the Nth part of that modality (see mediaPartIsWellFormed), so drift
+// here attaches the wrong bytes to the wrong entry. Asserted in both source
+// orderings.
 func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", testImagePNGMIME)
@@ -288,8 +289,8 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 				t.Fatalf("expected %d multimodal entries, got %d", len(tt.wantURLs), len(reqCtx.MultimodalEntries))
 			}
 			for i, want := range tt.wantURLs {
-				if got := reqCtx.MultimodalEntries[i].Index; got != i {
-					t.Errorf("entry[%d].Index = %d, want %d", i, got, i)
+				if got := reqCtx.MultimodalEntries[i].Modality; got != ModalityImage {
+					t.Errorf("entry[%d].Modality = %q, want %q", i, got, ModalityImage)
 				}
 				content := reqCtx.Body["messages"].([]any)[0].(map[string]any)["content"].([]any)
 				gotURL := content[i].(map[string]any)["image_url"].(map[string]any)["url"].(string)

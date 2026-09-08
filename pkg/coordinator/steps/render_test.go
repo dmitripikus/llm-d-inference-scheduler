@@ -69,8 +69,8 @@ func TestRenderStep_ParsesFullResponse(t *testing.T) {
 		Body:         map[string]any{"model": "gpt-4o", "messages": []any{}},
 		Model:        "gpt-4o",
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0},
-			{Index: 1},
+			{},
+			{},
 		},
 	}
 
@@ -159,9 +159,9 @@ func TestRenderStep_ChatCompletions_MultipleModalities(t *testing.T) {
 		Body:         map[string]any{"model": "test-model", "messages": []any{}},
 		Model:        "test-model",
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0, Modality: ModalityImage},
-			{Index: 1, Modality: ModalityAudio},
-			{Index: 2, Modality: ModalityVideo},
+			{Modality: ModalityImage},
+			{Modality: ModalityAudio},
+			{Modality: ModalityVideo},
 		},
 	}
 
@@ -430,8 +430,8 @@ func TestRenderStep_RejectsTooManyPlaceholderTokens(t *testing.T) {
 		OriginalPath: gateway.PathChatCompletions,
 		Body:         map[string]any{"model": "test"},
 		MultimodalEntries: []pipeline.MultimodalEntry{
-			{Index: 0},
-			{Index: 1},
+			{},
+			{},
 		},
 	}
 
@@ -466,7 +466,7 @@ func TestRenderStep_AllowsAtPlaceholderLimit(t *testing.T) {
 	reqCtx := &pipeline.RequestContext{
 		OriginalPath:      gateway.PathChatCompletions,
 		Body:              map[string]any{"model": "test"},
-		MultimodalEntries: []pipeline.MultimodalEntry{{Index: 0}},
+		MultimodalEntries: []pipeline.MultimodalEntry{{}},
 	}
 
 	if err := step.Execute(context.Background(), reqCtx); err != nil {
@@ -521,7 +521,7 @@ func TestRenderStep_ServiceError(t *testing.T) {
 	reqCtx := &pipeline.RequestContext{
 		OriginalPath:      gateway.PathChatCompletions,
 		Body:              map[string]any{"model": "test"},
-		MultimodalEntries: []pipeline.MultimodalEntry{{Index: 0}},
+		MultimodalEntries: []pipeline.MultimodalEntry{{}},
 	}
 
 	err := step.Execute(context.Background(), reqCtx)
@@ -620,8 +620,8 @@ func TestRenderStep_GenerateFormat_MultipleImages(t *testing.T) {
 		t.Fatalf("expected 2 multimodal entries, got %d", len(reqCtx.MultimodalEntries))
 	}
 	want := []pipeline.MultimodalEntry{
-		{Index: 0, Modality: ModalityImage, Hash: "abc123", KwargsData: "dGVuc29yMA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
-		{Index: 1, Modality: ModalityImage, Hash: "def456", KwargsData: "dGVuc29yMQ==", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 2}},
+		{Modality: ModalityImage, Hash: "abc123", KwargsData: "dGVuc29yMA==", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
+		{Modality: ModalityImage, Hash: "def456", KwargsData: "dGVuc29yMQ==", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 2}},
 	}
 	for i, w := range want {
 		if reqCtx.MultimodalEntries[i] != w {
@@ -678,9 +678,9 @@ func TestRenderStep_GenerateFormat_MultipleModalities(t *testing.T) {
 		t.Fatalf("expected 3 multimodal entries, got %d", len(reqCtx.MultimodalEntries))
 	}
 	want := []pipeline.MultimodalEntry{
-		{Index: 0, Modality: ModalityAudio, Hash: "aud-hash", KwargsData: "YXVkaW8=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
-		{Index: 1, Modality: ModalityImage, Hash: "img-hash", KwargsData: "aW1hZ2U=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
-		{Index: 2, Modality: ModalityVideo, Hash: "vid-hash", KwargsData: "dmlkZW8=", Placeholder: pipeline.PlaceholderRange{Offset: 8, Length: 2}},
+		{Modality: ModalityAudio, Hash: "aud-hash", KwargsData: "YXVkaW8=", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 2}},
+		{Modality: ModalityImage, Hash: "img-hash", KwargsData: "aW1hZ2U=", Placeholder: pipeline.PlaceholderRange{Offset: 4, Length: 3}},
+		{Modality: ModalityVideo, Hash: "vid-hash", KwargsData: "dmlkZW8=", Placeholder: pipeline.PlaceholderRange{Offset: 8, Length: 2}},
 	}
 	for i, w := range want {
 		if reqCtx.MultimodalEntries[i] != w {
