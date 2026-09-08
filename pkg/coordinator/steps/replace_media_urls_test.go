@@ -301,6 +301,39 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 	}
 }
 
+// encodeDataURI streams into a strings.Builder instead of encoding to a string
+// and concatenating, so it must still agree with the obvious implementation
+// byte for byte. Payload lengths 0-4 cover every base64 padding case, which is
+// where a missed Close() flush would show up.
+func TestEncodeDataURI_MatchesNaiveEncoding(t *testing.T) {
+	for n := 0; n <= 4; n++ {
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = byte('a' + i)
+		}
+		got := encodeDataURI(testImagePNGMIME, data)
+		want := "data:" + testImagePNGMIME + ";base64," + base64.StdEncoding.EncodeToString(data)
+		if got != want {
+			t.Errorf("encodeDataURI(%d bytes) = %q, want %q", n, got, want)
+		}
+		// The emitted URI must survive the parser the step uses on input.
+		ct, payload, err := parseDataURI(got)
+		if err != nil {
+			t.Fatalf("parseDataURI(%q): %v", got, err)
+		}
+		if ct != testImagePNGMIME {
+			t.Errorf("round-tripped content type = %q, want %q", ct, testImagePNGMIME)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			t.Fatalf("decoding round-tripped payload: %v", err)
+		}
+		if string(decoded) != string(data) {
+			t.Errorf("round-tripped payload = %q, want %q", decoded, data)
+		}
+	}
+}
+
 func TestParseDataURI(t *testing.T) {
 	tests := []struct {
 		name        string

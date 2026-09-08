@@ -136,15 +136,16 @@ pipeline:
         # Peak memory is per REQUEST, not per concurrent download. Every
         # downloaded payload is retained until the step returns, so the bound is
         #
-        #   (media parts in the request) x (that modality's cap) x ~2.7
+        #   (media parts in the request) x (that modality's cap) x ~1.4
         #
-        # plus up to max_concurrent_downloads x cap of raw bytes in flight.
-        # max_concurrent_downloads throttles how fast bytes arrive; it does not
-        # cap how many are held at once.
+        # where the 1.4 is the base64 form the payload is inlined as, plus up to
+        # max_concurrent_downloads x cap x ~2.4 for the downloads still in
+        # flight. max_concurrent_downloads throttles how fast bytes arrive; it
+        # does not cap how many are held at once.
         #
         # That makes max_multimodal_entries above the limit that actually bounds
-        # this, and it is unlimited by default. 8 parts x 10 MB is ~220 MB; 8
-        # parts at max_video_download_size: 200 is ~4.3 GB; the same request with
+        # this, and it is unlimited by default. 8 parts x 10 MB is ~110 MB; 8
+        # parts at max_video_download_size: 200 is ~2.2 GB; the same request with
         # max_multimodal_entries unset is unbounded -- a request body of a few KB
         # can name hundreds of URLs. Raise a per-modality cap below only together
         # with max_multimodal_entries.

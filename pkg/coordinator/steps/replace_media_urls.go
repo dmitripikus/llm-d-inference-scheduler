@@ -339,11 +339,11 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(s.maxConcurrentDownloads)
 
-	// results parallels refs: results[i] is the outcome of processing
-	// refs[i]. URL refs may be filled synchronously (data URI) or by a
-	// download goroutine; inline refs use no result slot, they were
-	// validated above and their payload is already in the body.
-	results := make([]mediaResult, len(refs))
+	// dataURIs parallels refs: dataURIs[i] is the rewritten "url" value for
+	// refs[i], built by that ref's download goroutine. Only downloaded refs
+	// get a slot. Inline input_audio refs, and URL refs that already are data
+	// URIs, carry their payload in the body already and leave the slot empty.
+	dataURIs := make([]string, len(refs))
 	urlCount := 0
 	for i, ref := range refs {
 		if err := gCtx.Err(); err != nil {
@@ -354,14 +354,15 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		}
 		urlCount++
 		if isDataURI(ref.url) {
-			contentType, b64, err := parseDataURI(ref.url)
+			// Validate only. The slot is already the payload, so there is
+			// nothing to rewrite and nothing worth retaining.
+			contentType, _, err := parseDataURI(ref.url)
 			if err != nil {
 				return fmt.Errorf("parsing data URI at message %d part %d: %w: %w", ref.msgIdx, ref.partIdx, err, pipeline.ErrBadRequest)
 			}
 			if !s.allowedContentTypeForModality(contentType, ref.modality) {
 				return fmt.Errorf("data URI content type %q not allowed for %s at message %d part %d: %w", contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 			}
-			results[i] = mediaResult{base64Data: b64, contentType: contentType}
 			continue
 		}
 		g.Go(func() error {
@@ -377,10 +378,11 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 				return fmt.Errorf("downloaded content type %q not allowed for %s at message %d part %d: %w",
 					contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 			}
-			results[i] = mediaResult{
-				base64Data:  base64.StdEncoding.EncodeToString(data),
-				contentType: contentType,
-			}
+			// Encode to the final data URI here rather than stashing the
+			// base64 for the walker pass below to wrap: holding both the
+			// payload and the URI containing it doubles what the step
+			// retains, and that retention is per request, not per download.
+			dataURIs[i] = encodeDataURI(contentType, data)
 			return nil
 		})
 	}
@@ -400,16 +402,11 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 	// slots in place and add one MultimodalEntry per ref. Entry order is
 	// the whole point of this pass; see mediaPartIsWellFormed.
 	for i, ref := range refs {
-		if ref.isInline {
-			// Already validated before the downloads started, and the inline
-			// "data" field already carries the base64 payload the backend
-			// needs, so the body passes through unmodified.
-			appendMultimodalEntry(reqCtx, ref.modality)
-			continue
-		}
-		r := results[i]
-		if !isDataURI(ref.url) {
-			ref.urlMap["url"] = fmt.Sprintf("data:%s;base64,%s", r.contentType, r.base64Data)
+		// A non-empty slot is exactly a ref that was downloaded. Inline
+		// input_audio refs and refs that were already data URIs need no
+		// rewrite: their payload is in the body as it arrived.
+		if dataURIs[i] != "" {
+			ref.urlMap["url"] = dataURIs[i]
 		}
 		appendMultimodalEntry(reqCtx, ref.modality)
 	}
@@ -545,13 +542,25 @@ type mediaRef struct {
 	format string // "wav", "mp3", ...
 }
 
-// mediaResult carries the outcome of processing one URL-based mediaRef:
-// the MIME type and base64 payload the entry ends up carrying. Inline
-// refs do not use a result slot; their fields are validated and appended
-// straight to MultimodalEntries in the walker-order pass.
-type mediaResult struct {
-	base64Data  string
-	contentType string
+// encodeDataURI returns data as "data:<contentType>;base64,<payload>".
+//
+// It encodes straight into the returned string instead of calling
+// base64.StdEncoding.EncodeToString and concatenating a prefix onto the
+// result, which would hold two full-size copies of the encoded payload at
+// once. strings.Builder hands its buffer to the string without copying, so
+// the payload is encoded exactly once. For a 200 MB video the difference is
+// ~270 MB of peak per concurrent download.
+func encodeDataURI(contentType string, data []byte) string {
+	prefix := "data:" + contentType + ";base64,"
+	var sb strings.Builder
+	sb.Grow(len(prefix) + base64.StdEncoding.EncodedLen(len(data)))
+	sb.WriteString(prefix)
+	enc := base64.NewEncoder(base64.StdEncoding, &sb)
+	// Neither call can fail: strings.Builder.Write never returns an error, and
+	// Close only flushes the final partial base64 block into it.
+	_, _ = enc.Write(data)
+	_ = enc.Close()
+	return sb.String()
 }
 
 // defaultAllowedContentTypesByModality is the built-in per-modality MIME
