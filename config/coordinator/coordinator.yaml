@@ -35,7 +35,7 @@ server:
   read_timeout: 30s
 
   # write_timeout caps the entire response. For streaming completions this
-  # bounds the total in-flight time of a single chat, set generously.
+  # bounds the total in-flight time of a single chat — set generously.
   write_timeout: 120s
   
   # Kubernetes terminationGracePeriodSeconds must exceed shutdown_timeout; SSE
@@ -122,19 +122,33 @@ pipeline:
 
         # max_multimodal_entries rejects requests with more than N media
         # parts (image_url + audio_url + video_url + input_audio combined)
-        # BEFORE any download happens. Cheapest admission gate.
+        # BEFORE any download happens. Cheapest admission gate, and the only
+        # thing bounding how many bytes one request can pull into memory --
+        # see max_download_size for why raising any per-modality cap means
+        # setting this one too.
         # 0 (or omitted) = unlimited.
         # max_multimodal_entries: 8
 
         # max_download_size caps the megabytes read per media download. A response
         # whose Content-Length or body exceeds the cap is rejected as a client
-        # error (4xx). Peak memory is bounded by max_concurrent_downloads x
-        # (largest active cap in MB) x ~2.3, where the 2.3 factor covers
-        # the raw bytes and their base64 form living in memory at the same
-        # time during encoding. With the defaults (10 concurrent x 10 MB)
-        # that is ~230 MB. Raising a per-modality cap below raises the
-        # ceiling in proportion: 10 concurrent downloads at
-        # max_video_download_size: 200 peak around 4.6 GB.
+        # error (4xx).
+        #
+        # Peak memory is per REQUEST, not per concurrent download. Every
+        # downloaded payload is retained until the step returns, so the bound is
+        #
+        #   (media parts in the request) x (that modality's cap) x ~2.7
+        #
+        # plus up to max_concurrent_downloads x cap of raw bytes in flight.
+        # max_concurrent_downloads throttles how fast bytes arrive; it does not
+        # cap how many are held at once.
+        #
+        # That makes max_multimodal_entries above the limit that actually bounds
+        # this, and it is unlimited by default. 8 parts x 10 MB is ~220 MB; 8
+        # parts at max_video_download_size: 200 is ~4.3 GB; the same request with
+        # max_multimodal_entries unset is unbounded -- a request body of a few KB
+        # can name hundreds of URLs. Raise a per-modality cap below only together
+        # with max_multimodal_entries.
+        #
         # data: URIs do not hit the network and are unaffected. This value is
         # the global default; each modality below may override it. Default 10 MB.
         # max_download_size: 10
@@ -183,7 +197,9 @@ pipeline:
         #   - image/png
 
         # allowed_audio_content_types overrides the built-in audio MIME
-        # allowlist. Applies to audio_url data URIs and to input_audio parts.
+        # allowlist. Applies to audio_url data URIs, to the Content-Type an
+        # http(s) audio_url origin returns, and to input_audio parts. Unlike
+        # image, the download path is checked whether or not this param is set.
         # Default: audio/wav, audio/x-wav, audio/mpeg, audio/mp3, audio/flac,
         # audio/x-flac, audio/ogg, audio/opus, audio/webm.
         # allowed_audio_content_types:
@@ -191,8 +207,10 @@ pipeline:
         #   - audio/mpeg
 
         # allowed_video_content_types overrides the built-in video MIME
-        # allowlist for video_url data URIs. Default: video/mp4, video/webm,
-        # video/quicktime, video/mpeg, video/ogg.
+        # allowlist. Applies to video_url data URIs and to the Content-Type an
+        # http(s) video_url origin returns; as with audio, the download path is
+        # checked whether or not this param is set.
+        # Default: video/mp4, video/webm, video/quicktime, video/mpeg, video/ogg.
         # allowed_video_content_types:
         #   - video/mp4
 
