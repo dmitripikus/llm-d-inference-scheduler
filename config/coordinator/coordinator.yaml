@@ -134,7 +134,8 @@ pipeline:
         # error (4xx).
         #
         # Peak memory is per REQUEST, not per concurrent download. Every
-        # downloaded payload is retained until the step returns, so the bound is
+        # downloaded payload is retained until the step returns, so what this
+        # step alone holds is
         #
         #   (media parts in the request) x (that modality's cap) x ~1.4
         #
@@ -143,9 +144,18 @@ pipeline:
         # flight. max_concurrent_downloads throttles how fast bytes arrive; it
         # does not cap how many are held at once.
         #
-        # That makes max_multimodal_entries above the limit that actually bounds
-        # this, and it is unlimited by default. 8 parts x 10 MB is ~110 MB; 8
-        # parts at max_video_download_size: 200 is ~2.2 GB; the same request with
+        # That figure is a floor for the pod, not the peak. The inlined payloads
+        # stay on the request body, and each later step that sends the body
+        # serializes them again into its own buffer: render, prefill, and decode
+        # each hold another full copy while their upstream call is in flight, and
+        # the encode fanout holds one media part per concurrent sub-request (up
+        # to the encode step's max_parallel). Size the memory limit for several
+        # times the number above, not for the number itself.
+        #
+        # That makes max_multimodal_entries the limit that actually bounds this,
+        # and it is unlimited by default. 8 parts x 10 MB is ~110 MB in this step;
+        # 8 parts at max_video_download_size: 200 is ~2.2 GB in this step and
+        # multiples of that across the pipeline; the same request with
         # max_multimodal_entries unset is unbounded -- a request body of a few KB
         # can name hundreds of URLs. Raise a per-modality cap below only together
         # with max_multimodal_entries.
@@ -191,6 +201,12 @@ pipeline:
         # list. Set to an empty list to accept any content type for that
         # modality, matching allowed_domains's "empty means unrestricted"
         # convention.
+        #
+        # Write the key with a value or leave it out entirely. A key with
+        # nothing after it is a null value, not an empty list, and the
+        # coordinator refuses to start rather than guess which was meant.
+        # A template that renders one of these from an unset variable
+        # produces exactly that shape.
 
         # allowed_image_content_types overrides the built-in image MIME
         # allowlist. When set to a non-empty list, ONLY these types are
@@ -201,12 +217,6 @@ pipeline:
         # built-in default is enforced on data URIs only, because plenty of
         # origins serve a valid image as application/octet-stream or with no
         # Content-Type at all, and rejecting those would break traffic that
-        #
-        # Write the key with a value or leave it out entirely. A key with
-        # nothing after it is a null value, not an empty list, and the
-        # coordinator refuses to start rather than guess which was meant.
-        # A template that renders one of these from an unset variable
-        # produces exactly that shape.
         # has always worked. Setting the param is read as a deliberate
         # lockdown and covers both paths. Audio and video downloads are
         # always checked; see max_audio_download_size for why they are
