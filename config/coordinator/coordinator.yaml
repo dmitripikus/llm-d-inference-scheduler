@@ -201,6 +201,12 @@ pipeline:
         # built-in default is enforced on data URIs only, because plenty of
         # origins serve a valid image as application/octet-stream or with no
         # Content-Type at all, and rejecting those would break traffic that
+        #
+        # Write the key with a value or leave it out entirely. A key with
+        # nothing after it is a null value, not an empty list, and the
+        # coordinator refuses to start rather than guess which was meant.
+        # A template that renders one of these from an unset variable
+        # produces exactly that shape.
         # has always worked. Setting the param is read as a deliberate
         # lockdown and covers both paths. Audio and video downloads are
         # always checked; see max_audio_download_size for why they are

@@ -2512,6 +2512,55 @@ func TestReplaceMediaURLsStep_RejectsNonListAllowedContentTypes(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_RejectsNullAllowedContentTypes fails construction
+// when a per-modality allowlist key is present with a null value, the shape a
+// template produces when its variable is unset. Silently treating it as absent
+// is worse than an empty list: for image it also leaves the download-path
+// Content-Type check off, so the operator gets no enforcement from a line they
+// wrote to add some. allowed_domains rejects a null value the same way, and the
+// image case is asserted below because it is the one with two behaviors
+// riding on the param.
+func TestReplaceMediaURLsStep_RejectsNullAllowedContentTypes(t *testing.T) {
+	for _, key := range []string{
+		"allowed_image_content_types",
+		"allowed_audio_content_types",
+		"allowed_video_content_types",
+	} {
+		t.Run(key, func(t *testing.T) {
+			if _, err := NewReplaceMediaURLsStep(nil, map[string]any{key: nil}); err == nil {
+				t.Fatalf("expected construction error for %s with a null value", key)
+			}
+		})
+	}
+}
+
+// TestReplaceMediaURLsStep_ExplicitImageAllowlistEnablesDownloadCheck pins the
+// pairing the null case above protects: setting the image allowlist at all,
+// empty list included, turns on the download-path Content-Type check, while
+// leaving it unset keeps the permissive path.
+func TestReplaceMediaURLsStep_ExplicitImageAllowlistEnablesDownloadCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+		want   bool
+	}{
+		{"unset", map[string]any{}, false},
+		{"empty list", map[string]any{"allowed_image_content_types": []any{}}, true},
+		{"explicit list", map[string]any{"allowed_image_content_types": []any{testImagePNGMIME}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			step, err := NewReplaceMediaURLsStep(nil, tc.params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := step.(*ReplaceMediaURLsStep).enforceDownloadContentType(ModalityImage)
+			if got != tc.want {
+				t.Fatalf("enforceDownloadContentType(image) = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestReplaceMediaURLsStep_AllowedContentTypes_EmptyMeansUnrestricted
 // asserts that setting allowed_<modality>_content_types to an empty list
 // disables the per-modality allowlist for that modality, so any type is

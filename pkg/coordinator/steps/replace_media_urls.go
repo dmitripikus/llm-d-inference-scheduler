@@ -740,6 +740,14 @@ var perModalityContentTypeParams = map[string]string{
 // value in the returned map, which allowedContentTypeForModality treats
 // as "accept anything".
 //
+// A present key with a null value ("allowed_audio_content_types:" and
+// nothing after it, which a template renders whenever its variable is
+// unset) is an error, not an absent key. Treating it as absent would
+// restore the built-in default and, for image, leave
+// enforceDownloadContentType off, so the operator would get no
+// download-path check from a line they wrote to add one. allowed_domains
+// rejects a null value for the same reason.
+//
 // The second return value names the modalities that were configured
 // explicitly, empty lists included. A default set and an override that
 // happens to match it are indistinguishable in the first return value, and
@@ -755,7 +763,7 @@ func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]
 	overrides := make(map[string]struct{}, len(perModalityContentTypeParams))
 	for mod, key := range perModalityContentTypeParams {
 		raw, present := params[key]
-		if !present || raw == nil {
+		if !present {
 			continue
 		}
 		types, err := parseContentTypeSet(raw, key)
