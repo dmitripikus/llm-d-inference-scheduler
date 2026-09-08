@@ -356,7 +356,7 @@ func TestReplaceMediaURLsStep_ExecuteAgreesWithWellFormedPredicate(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var gotModalities []string
+	gotModalities := make([]string, 0, len(reqCtx.MultimodalEntries))
 	for _, e := range reqCtx.MultimodalEntries {
 		gotModalities = append(gotModalities, e.Modality)
 	}
