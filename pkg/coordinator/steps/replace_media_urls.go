@@ -358,7 +358,7 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 	// get a slot. Inline input_audio refs, and URL refs that already are data
 	// URIs, carry their payload in the body already and leave the slot empty.
 	dataURIs := make([]string, len(refs))
-	urlCount := 0
+	downloadCount := 0
 	for i, ref := range refs {
 		if err := gCtx.Err(); err != nil {
 			break
@@ -366,7 +366,6 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		if ref.isInline {
 			continue
 		}
-		urlCount++
 		if isDataURI(ref.url) {
 			// Validate only. The slot is already the payload, so there is
 			// nothing to rewrite and nothing worth retaining.
@@ -383,6 +382,7 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			}
 			continue
 		}
+		downloadCount++
 		g.Go(func() error {
 			data, contentType, err := s.download(gCtx, ref.url, ref.modality)
 			if err != nil {
@@ -407,7 +407,10 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 
 	// Log proxy presence only: HTTP(S)_PROXY URLs can carry basic-auth
 	// credentials (http://user:pass@host) that must not reach logs.
-	logger.V(logutil.TRACE).Info("downloading media", "count", urlCount, "http_proxy_set", os.Getenv("HTTP_PROXY") != "", "https_proxy_set", os.Getenv("HTTPS_PROXY") != "")
+	// count is the number of refs that go over the network. Data URIs and
+	// inline input_audio are excluded, so the number can be read against
+	// egress volume.
+	logger.V(logutil.TRACE).Info("downloading media", "count", downloadCount, "http_proxy_set", os.Getenv("HTTP_PROXY") != "", "https_proxy_set", os.Getenv("HTTPS_PROXY") != "")
 
 	if err := g.Wait(); err != nil {
 		return err
@@ -600,7 +603,7 @@ type mediaRef struct {
 // the payload is encoded exactly once. For a 200 MB video the difference is
 // ~270 MB of peak per concurrent download.
 func encodeDataURI(contentType string, data []byte) string {
-	prefix := "data:" + contentType + ";base64,"
+	prefix := dataURIPrefix + contentType + ";base64,"
 	var sb strings.Builder
 	sb.Grow(len(prefix) + base64.StdEncoding.EncodedLen(len(data)))
 	sb.WriteString(prefix)
@@ -697,12 +700,21 @@ func (s *ReplaceMediaURLsStep) downloadSizeFor(modality string) int64 {
 	return s.maxDownloadSize
 }
 
+// modalityParam pairs a modality with the config key that overrides one of
+// its defaults.
+type modalityParam struct {
+	modality string
+	param    string
+}
+
 // perModalityDownloadSizeParams names the config keys that override
-// max_download_size on a per-modality basis. Ordering matches Modality*.
-var perModalityDownloadSizeParams = map[string]string{
-	ModalityImage: "max_image_download_size",
-	ModalityAudio: "max_audio_download_size",
-	ModalityVideo: "max_video_download_size",
+// max_download_size on a per-modality basis. A slice rather than a map, so a
+// config with more than one bad value always reports the same one and the
+// operator does not chase a different message on each restart.
+var perModalityDownloadSizeParams = []modalityParam{
+	{ModalityImage, "max_image_download_size"},
+	{ModalityAudio, "max_audio_download_size"},
+	{ModalityVideo, "max_video_download_size"},
 }
 
 // parsePerModalityDownloadSizes reads the three optional per-modality cap
@@ -711,8 +723,8 @@ var perModalityDownloadSizeParams = map[string]string{
 // step can distinguish "no override" from "override set to zero".
 func parsePerModalityDownloadSizes(params map[string]any) (map[string]int64, error) {
 	var out map[string]int64
-	for mod, key := range perModalityDownloadSizeParams {
-		v, ok, err := paramInt(params, key)
+	for _, mp := range perModalityDownloadSizeParams {
+		v, ok, err := paramInt(params, mp.param)
 		if err != nil {
 			return nil, err
 		}
@@ -720,22 +732,23 @@ func parsePerModalityDownloadSizes(params map[string]any) (map[string]int64, err
 			continue
 		}
 		if v <= 0 || v > (math.MaxInt-1)/config.BytesPerMB {
-			return nil, fmt.Errorf("%s must be positive and at most %d MB, got %d", key, (math.MaxInt-1)/config.BytesPerMB, v)
+			return nil, fmt.Errorf("%s must be positive and at most %d MB, got %d", mp.param, (math.MaxInt-1)/config.BytesPerMB, v)
 		}
 		if out == nil {
 			out = make(map[string]int64, len(perModalityDownloadSizeParams))
 		}
-		out[mod] = int64(v) * config.BytesPerMB
+		out[mp.modality] = int64(v) * config.BytesPerMB
 	}
 	return out, nil
 }
 
 // perModalityContentTypeParams names the config keys that override the
-// built-in MIME allowlist on a per-modality basis.
-var perModalityContentTypeParams = map[string]string{
-	ModalityImage: "allowed_image_content_types",
-	ModalityAudio: "allowed_audio_content_types",
-	ModalityVideo: "allowed_video_content_types",
+// built-in MIME allowlist on a per-modality basis. A slice for the same
+// reason as perModalityDownloadSizeParams.
+var perModalityContentTypeParams = []modalityParam{
+	{ModalityImage, "allowed_image_content_types"},
+	{ModalityAudio, "allowed_audio_content_types"},
+	{ModalityVideo, "allowed_video_content_types"},
 }
 
 // parsePerModalityContentTypes builds the final per-modality allowlist map,
@@ -770,22 +783,22 @@ func parsePerModalityContentTypes(params map[string]any) (map[string]map[string]
 		out[mod] = maps.Clone(set)
 	}
 	overrides := make(map[string]struct{}, len(perModalityContentTypeParams))
-	for mod, key := range perModalityContentTypeParams {
-		raw, present := params[key]
+	for _, mp := range perModalityContentTypeParams {
+		raw, present := params[mp.param]
 		if !present {
 			continue
 		}
-		types, err := parseContentTypeSet(raw, key)
+		types, err := parseContentTypeSet(raw, mp.param)
 		if err != nil {
 			return nil, nil, err
 		}
-		overrides[mod] = struct{}{}
+		overrides[mp.modality] = struct{}{}
 		if len(types) == 0 {
 			// Empty list = accept anything for this modality.
-			out[mod] = nil
+			out[mp.modality] = nil
 			continue
 		}
-		out[mod] = types
+		out[mp.modality] = types
 	}
 	return out, overrides, nil
 }
