@@ -735,6 +735,98 @@ func TestExtractMultimodalEntries_MultiModalityResponse(t *testing.T) {
 	}
 }
 
+// TestExtractMultimodalEntries_UnhashedModalityRejected covers a modality that
+// mm_hashes leaves out. Dropping it would strip the item from the prefill and
+// decode bodies while its placeholder tokens stay in token_ids.
+func TestExtractMultimodalEntries_UnhashedModalityRejected(t *testing.T) {
+	placeholder := func(offset, length int) any {
+		return map[string]any{"offset": float64(offset), "length": float64(length)}
+	}
+
+	tests := []struct {
+		name     string
+		features map[string]any
+	}{
+		{
+			name: "mm_placeholders_only",
+			features: map[string]any{
+				"mm_hashes": map[string]any{ModalityImage: []any{"img-a"}},
+				"mm_placeholders": map[string]any{
+					ModalityImage: []any{placeholder(1, 2)},
+					ModalityAudio: []any{placeholder(4, 2)},
+				},
+			},
+		},
+		{
+			name: "kwargs_data_only",
+			features: map[string]any{
+				"mm_hashes":       map[string]any{ModalityImage: []any{"img-a"}},
+				"mm_placeholders": map[string]any{ModalityImage: []any{placeholder(1, 2)}},
+				"kwargs_data": map[string]any{
+					ModalityImage: []any{"k-img-a"},
+					ModalityAudio: []any{"k-aud-a"},
+				},
+			},
+		},
+		{
+			name: "no_mm_hashes_at_all",
+			features: map[string]any{
+				"mm_placeholders": map[string]any{ModalityAudio: []any{placeholder(1, 2)}},
+			},
+		},
+		{
+			name: "empty_hash_list_with_placeholder",
+			features: map[string]any{
+				"mm_hashes":       map[string]any{ModalityAudio: []any{}},
+				"mm_placeholders": map[string]any{ModalityAudio: []any{placeholder(1, 2)}},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, err := extractMultimodalEntries(tc.features)
+			if err == nil {
+				t.Fatalf("expected an error, got entries %v", entries)
+			}
+			if !errors.Is(err, pipeline.ErrBadRequest) {
+				t.Fatalf("expected ErrBadRequest, got %v", err)
+			}
+		})
+	}
+}
+
+// TestExtractMultimodalEntries_EmptyModalityListAccepted covers a modality
+// declared with no items. Every field agrees on zero, so there is nothing to
+// drop and nothing to reject.
+func TestExtractMultimodalEntries_EmptyModalityListAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		features map[string]any
+	}{
+		{
+			name:     "placeholders_absent",
+			features: map[string]any{"mm_hashes": map[string]any{ModalityAudio: []any{}}},
+		},
+		{
+			name: "placeholders_also_empty",
+			features: map[string]any{
+				"mm_hashes":       map[string]any{ModalityAudio: []any{}},
+				"mm_placeholders": map[string]any{ModalityAudio: []any{}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, err := extractMultimodalEntries(tc.features)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("expected no entries, got %v", entries)
+			}
+		})
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

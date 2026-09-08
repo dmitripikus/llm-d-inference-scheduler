@@ -345,11 +345,43 @@ func modalitiesInFeatures(features map[string]any, field string) ([]string, erro
 	return out, nil
 }
 
+// checkModalitiesHashed reports an error when mm_placeholders or kwargs_data
+// carries a modality that hashed does not name. mm_hashes decides which
+// modalities a features map describes, and only the modalities it names are
+// turned into entries.
+//
+// Skipping the extra key instead would drop the item from the body that
+// prefill and decode receive while its placeholder tokens stay in token_ids,
+// so the engine sees a prompt whose placeholders have nothing behind them.
+func checkModalitiesHashed(features map[string]any, hashed []string) error {
+	known := make(map[string]struct{}, len(hashed))
+	for _, mod := range hashed {
+		known[mod] = struct{}{}
+	}
+	for _, field := range []string{"mm_placeholders", "kwargs_data"} {
+		mods, err := modalitiesInFeatures(features, field)
+		if err != nil {
+			return err
+		}
+		for _, mod := range mods {
+			if _, ok := known[mod]; !ok {
+				return fmt.Errorf("%s[%s] has no matching mm_hashes[%s]: %w",
+					field, mod, mod, pipeline.ErrBadRequest)
+			}
+		}
+	}
+	return nil
+}
+
 // extractMultimodalEntries builds []pipeline.MultimodalEntry from the parallel
 // slices in a generate-format features map. Every modality key present under
 // mm_hashes produces a run of entries in the returned slice; modalities are
 // visited in sorted order for determinism. Returns nil when features is nil or
 // mm_hashes carries no items (text-only request).
+//
+// mm_hashes names the modality set. A modality key that only the other fields
+// carry is ErrBadRequest, because it describes an item with no hash that no
+// entry can be built from.
 //
 // Per-modality invariants:
 //   - mm_hashes and mm_placeholders are required and must be the same length.
@@ -369,6 +401,9 @@ func extractMultimodalEntries(features map[string]any) ([]pipeline.MultimodalEnt
 	if err != nil {
 		return nil, err
 	}
+	if err := checkModalitiesHashed(features, modalities); err != nil {
+		return nil, err
+	}
 	if len(modalities) == 0 {
 		return nil, nil
 	}
@@ -379,17 +414,10 @@ func extractMultimodalEntries(features map[string]any) ([]pipeline.MultimodalEnt
 		if err != nil {
 			return nil, err
 		}
-		if len(rawHashes) == 0 {
-			continue
-		}
 
 		rawPlaceholders, present, err := mmModalityArray(features, "mm_placeholders", mod)
 		if err != nil {
 			return nil, err
-		}
-		if !present {
-			return nil, fmt.Errorf("mm_placeholders[%s] is required when mm_hashes[%s] is set: %w",
-				mod, mod, pipeline.ErrBadRequest)
 		}
 
 		rawKwargs, hasKwargs, err := mmModalityArray(features, "kwargs_data", mod)
@@ -398,6 +426,10 @@ func extractMultimodalEntries(features map[string]any) ([]pipeline.MultimodalEnt
 		}
 
 		n := len(rawHashes)
+		if !present && n > 0 {
+			return nil, fmt.Errorf("mm_placeholders[%s] is required when mm_hashes[%s] is set: %w",
+				mod, mod, pipeline.ErrBadRequest)
+		}
 		if len(rawPlaceholders) != n {
 			return nil, fmt.Errorf("features length mismatch for %s: mm_hashes has %d, mm_placeholders has %d: %w",
 				mod, n, len(rawPlaceholders), pipeline.ErrBadRequest)
