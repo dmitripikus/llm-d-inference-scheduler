@@ -363,6 +363,66 @@ func TestReplaceMediaURLsStep_ExecuteAgreesWithWellFormedPredicate(t *testing.T)
 	}
 }
 
+// base64LenForBytes must agree with the real encoder for ordinary caps and must
+// stay positive for every cap the config validation permits. The naive
+// 4*((cap+2)/3) overflows int64 for a large max_audio_download_size, and a
+// negative bound would reject every input_audio instead of accepting more.
+func TestBase64LenForBytes(t *testing.T) {
+	// Agreement with the encoder, including the non-multiple-of-3 sizes where
+	// padding decides the answer.
+	for _, n := range []int{0, 1, 2, 3, 4, 5, 6, 100, 1024, 1024 * 1024} {
+		want := int64(len(base64.StdEncoding.EncodeToString(make([]byte, n))))
+		if got := base64LenForBytes(int64(n)); got != want {
+			t.Errorf("base64LenForBytes(%d) = %d, want %d", n, got, want)
+		}
+	}
+
+	// Never negative, never zero, for anything reachable through config.
+	maxConfigurable := int64((math.MaxInt-1)/config.BytesPerMB) * config.BytesPerMB
+	for _, cap64 := range []int64{
+		maxConfigurable,
+		math.MaxInt64 / 4,
+		math.MaxInt64 / 2,
+		math.MaxInt64 - 2,
+		math.MaxInt64,
+	} {
+		if got := base64LenForBytes(cap64); got <= 0 {
+			t.Errorf("base64LenForBytes(%d) = %d, want a positive bound", cap64, got)
+		}
+	}
+}
+
+// A cap so large that the encoded-length bound saturates must still accept a
+// normal payload. Before the saturating multiply this rejected everything.
+func TestReplaceMediaURLsStep_InputAudio_HugeCapStillAccepts(t *testing.T) {
+	hugeMB := (math.MaxInt - 1) / config.BytesPerMB
+	step, err := NewReplaceMediaURLsStep(nil, map[string]any{"max_audio_download_size": hugeMB})
+	if err != nil {
+		t.Fatalf("expected the maximum permitted cap to be accepted: %v", err)
+	}
+	reqCtx := &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":             inputAudioPartType,
+							inputAudioPartType: map[string]any{"data": "aGk=", "format": "wav"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := step.(*ReplaceMediaURLsStep).Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("expected payload accepted under a saturating cap, got %v", err)
+	}
+	if got := len(reqCtx.MultimodalEntries); got != 1 {
+		t.Fatalf("expected 1 entry, got %d", got)
+	}
+}
+
 // encodeDataURI streams into a strings.Builder instead of encoding to a string
 // and concatenating, so it must still agree with the obvious implementation
 // byte for byte. Payload lengths 0-4 cover every base64 padding case, which is
