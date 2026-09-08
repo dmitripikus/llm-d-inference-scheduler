@@ -159,9 +159,9 @@ var errEmptyModality = errors.New("MultimodalEntry has empty Modality, defaultin
 // to ModalityImage, so a caller that built an entry without setting the
 // field does not produce a "" modality key.
 //
-// The fallback is not benign: it groups the entry under image everywhere
+// The fallback carries a cost: it groups the entry under image everywhere
 // (mm_hashes, the encode fanout, render's per-modality slots), so a
-// mis-tagged entry pairs with the wrong part and the failure surfaces far
+// wrongly tagged entry pairs with the wrong part and the failure surfaces far
 // from here, as an encoder rejection. Log through logger.Error, which is
 // emitted at any verbosity, so an occurrence is visible in production
 // rather than only under debug logging.

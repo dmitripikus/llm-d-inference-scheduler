@@ -168,9 +168,8 @@ type ReplaceMediaURLsStep struct {
 	downloadTimeout        time.Duration
 	maxConcurrentDownloads int
 	maxMultimodalEntries   int
-	// maxDownloadSize is the default cap applied when a modality has no
-	// per-modality override. Also the fallback used by input_audio size
-	// validation when max_audio_download_size is unset.
+	// maxDownloadSize is the cap applied when a modality has no per-modality
+	// override. Reached through downloadSizeFor.
 	maxDownloadSize int64
 	// maxDownloadSizeByMod optionally overrides maxDownloadSize per modality
 	// (keys are the ModalityImage / ModalityAudio / ModalityVideo constants).
@@ -465,10 +464,9 @@ func (s *ReplaceMediaURLsStep) validateInlineAudio(ref mediaRef) error {
 // the request body is larger than the modality's cap allows.
 //
 // The bound is on the length of the base64 string, checked before any decode,
-// so an oversized payload is never allocated. It is an allocation bound, not a
-// byte-exact limit: when the cap is not a multiple of 3, a string right at the
-// bound decodes to up to 2 bytes over. That slack is fine, bounding the
-// allocation is the point.
+// so an oversized payload is never allocated. It bounds the allocation to
+// within 2 bytes of the cap: when the cap is not a multiple of 3, a string
+// right at the bound decodes to up to 2 bytes over.
 func (s *ReplaceMediaURLsStep) inlineSizeExceeded(b64, modality string) bool {
 	return int64(len(b64)) > base64LenForBytes(s.downloadSizeFor(modality))
 }
@@ -477,17 +475,15 @@ func (s *ReplaceMediaURLsStep) inlineSizeExceeded(b64, modality string) bool {
 // URI in a URL slot, whose bytes arrive in the request body instead of over
 // the network.
 //
-// Audio and video are enforced. The caps exist to bound what a single request
-// holds in memory, and a 200 MB clip costs the same whether it was downloaded
-// or pasted into the body. Leaving data URIs out would also make the two ways
-// of sending the same audio disagree: input_audio, which is only ever inline,
-// is capped by validateInlineAudio.
+// Audio and video are enforced. The caps bound what a single request holds in
+// memory, and a 200 MB clip costs the same whether it was downloaded or pasted
+// into the body. Enforcing here also keeps the two ways of sending the same
+// audio in agreement, since input_audio is only ever inline and is capped by
+// validateInlineAudio.
 //
-// Images are not enforced, for the reason enforceDownloadContentType leaves
-// them out of the Content-Type check: image data URIs have never been
-// size-checked here, so applying the cap would start rejecting requests
-// between max_image_download_size and server.max_request_body_size that are
-// accepted. server.max_request_body_size is what bounds those.
+// Images are exempt, on the same grounds as their exemption from the
+// download-path Content-Type check in enforceDownloadContentType.
+// server.max_request_body_size is what bounds an image data URI.
 func (s *ReplaceMediaURLsStep) enforceInlineSize(modality string) bool {
 	return modality != ModalityImage
 }
@@ -497,11 +493,10 @@ func (s *ReplaceMediaURLsStep) enforceInlineSize(modality string) bool {
 //
 // The multiply saturates at MaxInt64 instead of wrapping. A per-modality cap is
 // validated only against MaxInt/BytesPerMB, so sizeCap can legitimately reach
-// ~9.2e18 bytes, and 4*ceil(sizeCap/3) overflows int64 above ~6.9e18 -- which
-// would turn the bound negative and reject every input_audio rather than
-// accepting the large payloads the operator asked for. Saturating is the right
-// answer at that size: no request body can come close to MaxInt64 bytes, so the
-// check simply stops binding, which is what a cap that large means.
+// ~9.2e18 bytes, and 4*ceil(sizeCap/3) overflows int64 above ~6.9e18, turning
+// the bound negative and rejecting every input_audio. Saturated, the bound sits
+// above any request body a server will accept, so a cap that large stops
+// binding.
 func base64LenForBytes(sizeCap int64) int64 {
 	if sizeCap > math.MaxInt64-2 {
 		return math.MaxInt64
@@ -681,10 +676,10 @@ func (s *ReplaceMediaURLsStep) allowedContentTypeForModality(contentType, modali
 //
 // Images are enforced only when the operator set allowed_image_content_types
 // explicitly. Enforcing the built-in default here would reject the many
-// origins that serve a perfectly good image as application/octet-stream, or
-// with no Content-Type at all (which lands on defaultContentType) -- traffic
-// that has always been accepted. An explicit allowlist is a deliberate
-// lockdown, so it applies to downloads as well as data URIs.
+// origins that serve a valid image as application/octet-stream or with no
+// Content-Type at all (which lands on defaultContentType). An explicit
+// allowlist reads as a deliberate lockdown, so it applies to downloads as well
+// as data URIs.
 func (s *ReplaceMediaURLsStep) enforceDownloadContentType(modality string) bool {
 	if modality != ModalityImage {
 		return true
@@ -693,9 +688,10 @@ func (s *ReplaceMediaURLsStep) enforceDownloadContentType(modality string) bool 
 	return explicit
 }
 
-// downloadSizeFor returns the per-modality download cap when the operator set
-// one, else the global default. Callers use this both for HTTP downloads
-// (Content-Length + LimitReader bound) and for input_audio inline size checks.
+// downloadSizeFor returns the per-modality cap when the operator set one, else
+// the global default. It is the single source of the byte bound, for HTTP
+// downloads and for inline payloads alike; coordinator.yaml's max_download_size
+// comment records which payloads each modality's cap reaches.
 func (s *ReplaceMediaURLsStep) downloadSizeFor(modality string) int64 {
 	if v, ok := s.maxDownloadSizeByMod[modality]; ok {
 		return v
@@ -767,11 +763,10 @@ var perModalityContentTypeParams = []modalityParam{
 //
 // A present key with a null value ("allowed_audio_content_types:" and
 // nothing after it, which a template renders whenever its variable is
-// unset) is an error, not an absent key. Treating it as absent would
-// restore the built-in default and, for image, leave
-// enforceDownloadContentType off, so the operator would get no
-// download-path check from a line they wrote to add one. allowed_domains
-// rejects a null value for the same reason.
+// unset) is rejected. Reading it as an absent key would restore the built-in
+// default and, for image, leave enforceDownloadContentType off, so the
+// operator would get no download-path check from a line they wrote to add
+// one. allowed_domains rejects a null value for the same reason.
 //
 // The second return value names the modalities that were configured
 // explicitly, empty lists included. A default set and an override that

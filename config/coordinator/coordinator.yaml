@@ -146,13 +146,13 @@ pipeline:
         # flight. max_concurrent_downloads throttles how fast bytes arrive; it
         # does not cap how many are held at once.
         #
-        # That figure is a floor for the pod, not the peak. The inlined payloads
+        # That figure is a floor for the pod, well under the peak. The payloads
         # stay on the request body, and each later step that sends the body
         # serializes them again into its own buffer: render, prefill, and decode
         # each hold another full copy while their upstream call is in flight, and
         # the encode fanout holds one media part per concurrent sub-request (up
         # to the encode step's max_parallel). Size the memory limit for several
-        # times the number above, not for the number itself.
+        # times the number above.
         #
         # That makes max_multimodal_entries the limit that actually bounds this.
         # 8 parts x 10 MB is ~110 MB in this step; 8 parts at
@@ -163,8 +163,7 @@ pipeline:
         # This value is the global default; each modality below may override
         # it. Default 10 MB.
         #
-        # Which payloads each cap covers differs by modality, because the image
-        # path predates the audio and video ones and keeps its behavior:
+        # Which payloads each cap covers differs by modality:
         #
         #   image  http(s) downloads only. An image data: URI is not
         #          size-checked; server.max_request_body_size bounds it.
@@ -213,11 +212,10 @@ pipeline:
         # accepted -- for image_url data URIs AND for the Content-Type an
         # http(s) image_url origin returns. An empty list accepts any type.
         #
-        # Leaving this unset is not the same as listing the defaults: the
-        # built-in default is enforced on data URIs only, because plenty of
-        # origins serve a valid image as application/octet-stream or with no
-        # Content-Type at all, and rejecting those would break traffic that
-        # has always worked. Setting the param is read as a deliberate
+        # Leaving this unset differs from listing the defaults: the built-in
+        # default is enforced on data URIs only, because plenty of origins
+        # serve a valid image as application/octet-stream or with no
+        # Content-Type at all. Setting the param is read as a deliberate
         # lockdown and covers both paths. Audio and video downloads are
         # always checked; see max_audio_download_size for why they are
         # treated more strictly.

@@ -127,9 +127,9 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 			if err != nil {
 				// Entries and parts got out of line upstream (see
 				// mediaPartIsWellFormed). Both are built from the same
-				// request by the same rule, so this is a coordinator bug,
-				// not bad client input: fail here rather than send the
-				// encoder a request we already know is wrong.
+				// request by the same rule, so reaching here means the
+				// coordinator has a bug. Fail rather than send the encoder
+				// a request already known to be wrong.
 				err = fmt.Errorf("encode[%d]: %w", i, err)
 				logger.Error(err, "encode fanout entry has no media part",
 					"index", i,
@@ -313,9 +313,8 @@ func collectMediaParts(body map[string]any) map[string][]map[string]any {
 // encode sub-request's messages[0].content slice.
 //
 // An out-of-range localIdx means entries and parts got out of line (see
-// mediaPartIsWellFormed) and returns an error. There is nothing useful to
-// send in that case: the entry's bytes are exactly what the encoder needs
-// and they are not there.
+// mediaPartIsWellFormed) and returns an error, since the part holds the bytes
+// the encoder is being asked to encode.
 func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality string, localIdx int) (map[string]any, error) {
 	parts := partsByMod[modality]
 	if localIdx < 0 || localIdx >= len(parts) {

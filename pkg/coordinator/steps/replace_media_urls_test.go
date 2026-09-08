@@ -305,9 +305,10 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 // Execute and mediaPartIsWellFormed must agree on exactly which parts count.
 // Execute fixes the entry order that the encode fanout and decode.injectUUIDs
 // later index into, and those two use the predicate, so a part accepted by one
-// and rejected by the other shifts the pairing. Both now run classifyMediaPart;
-// this asserts the agreement end to end rather than trusting that they still
-// do. Every malformed shape and every recognized part type is represented.
+// and rejected by the other shifts the pairing. Both delegate to
+// classifyMediaPart; this asserts the agreement end to end rather than trusting
+// the delegation. Every malformed shape and every recognized part type is
+// represented.
 func TestReplaceMediaURLsStep_ExecuteAgreesWithWellFormedPredicate(t *testing.T) {
 	parts := []any{
 		map[string]any{"type": "text", "text": "hi"},
@@ -319,7 +320,8 @@ func TestReplaceMediaURLsStep_ExecuteAgreesWithWellFormedPredicate(t *testing.T)
 		// audio_url, including a non-object inner.
 		map[string]any{"type": audioURLPartType, audioURLPartType: map[string]any{"url": "data:audio/wav;base64,aGk="}},
 		map[string]any{"type": audioURLPartType, audioURLPartType: "not-an-object"},
-		// input_audio is inline and keyed on data, not url.
+		// input_audio is inline and carries its payload under data rather
+		// than url.
 		map[string]any{"type": inputAudioPartType, inputAudioPartType: map[string]any{"data": "aGk=", "format": "wav"}},
 		map[string]any{"type": inputAudioPartType, inputAudioPartType: map[string]any{"data": "", "format": "wav"}},
 		map[string]any{"type": inputAudioPartType, inputAudioPartType: map[string]any{"format": "wav"}},
@@ -1873,9 +1875,8 @@ func TestReplaceMediaURLsStep_AudioDataURI_UsesAudioCap(t *testing.T) {
 }
 
 // TestReplaceMediaURLsStep_ImageDataURI_ExemptFromSizeCap pins the deliberate
-// exemption in enforceInlineSize. Image data URIs have never been size-checked
-// here, so the cap must not start rejecting bodies that server's
-// max_request_body_size already bounds.
+// exemption in enforceInlineSize: an image data URI is bounded by the server's
+// max_request_body_size, not by the per-modality download cap.
 func TestReplaceMediaURLsStep_ImageDataURI_ExemptFromSizeCap(t *testing.T) {
 	oversized := strings.Repeat("A", 2*1024*1024)
 	step, err := NewReplaceMediaURLsStep(nil, map[string]any{"max_download_size": 1})
@@ -2495,8 +2496,8 @@ func TestReplaceMediaURLsStep_RejectsInvalidPerModalityCap(t *testing.T) {
 }
 
 // TestReplaceMediaURLsStep_AllowedAudioContentTypes_Overrides swaps in a
-// narrower audio allowlist ({audio/wav}) and asserts (a) audio/wav still
-// passes and (b) audio/mpeg, allowed by the default set, is now rejected.
+// narrower audio allowlist ({audio/wav}) and asserts (a) audio/wav passes and
+// (b) audio/mpeg, which the default set allows, is rejected.
 func TestReplaceMediaURLsStep_AllowedAudioContentTypes_Overrides(t *testing.T) {
 	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{
 		"allowed_audio_content_types": []any{testAudioWAVMIME},
