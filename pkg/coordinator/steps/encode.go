@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
@@ -124,7 +123,7 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 		g.Go(func() error {
 			tokenIDs := s.buildEncodeTokenIDs(reqCtx.TokenIDs, entry)
 
-			body, err := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod, logger)
+			body, err := s.buildEncodeBody(reqCtx, tokenIDs, entry, mod, localIdx, format, partsByMod)
 			if err != nil {
 				// Entries and parts got out of line upstream (see
 				// mediaPartIsWellFormed). Both are built from the same
@@ -221,8 +220,12 @@ func (s *EncodeStep) buildEncodeTokenIDs(fullTokenIDs []int, entry pipeline.Mult
 	return tokenIDs
 }
 
-func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any, logger logr.Logger) (map[string]any, error) {
-	mod := entryModality(entry, logger)
+// buildEncodeBody builds one fanout sub-request. mod and localIdx are the
+// entry's pairing coordinates, both resolved once by Execute: mod is the
+// entry's modality per entryModality, localIdx its position among the entries
+// sharing that modality. Taking mod as a parameter rather than recomputing it
+// keeps entryModality's empty-Modality error log to one line per entry.
+func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, mod string, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any) (map[string]any, error) {
 	placeholder := map[string]any{"offset": 1, "length": entry.Placeholder.Length}
 	switch format {
 	case gateway.FormatChatCompletions:
