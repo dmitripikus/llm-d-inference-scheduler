@@ -66,6 +66,38 @@ var partTypeModality = map[string]string{
 	inputAudioPartType: ModalityAudio,
 }
 
+// classifyMediaPart extracts the fields replace_media_urls needs from a media
+// content part of the given type, returning them as a partially filled
+// mediaRef (the caller supplies msgIdx and partIdx). ok is false when the part
+// is missing those fields, and reason then names what was wrong so the caller
+// can log it. partType must already be known to be a media type; modality is
+// the one partTypeModality maps it to.
+//
+// This is the one definition of the well-formedness rule.
+// mediaPartIsWellFormed wraps it for walkers that need only the yes/no answer,
+// so every walker accepts and rejects exactly the same parts. See
+// mediaPartIsWellFormed for why that has to hold.
+func classifyMediaPart(partMap map[string]any, partType, modality string) (ref mediaRef, ok bool, reason string) {
+	inner, isObject := partMap[partType].(map[string]any)
+	if !isObject {
+		return mediaRef{}, false, "inner object missing or wrong type"
+	}
+	if partType == inputAudioPartType {
+		data, _ := inner["data"].(string)
+		if data == "" {
+			return mediaRef{}, false, "data is empty or not a string"
+		}
+		format, _ := inner["format"].(string)
+		return mediaRef{modality: modality, isInline: true, data: data, format: format}, true, ""
+	}
+	// URL-based parts: image_url, audio_url, video_url.
+	url, isString := inner["url"].(string)
+	if !isString {
+		return mediaRef{}, false, "url is missing or not a string"
+	}
+	return mediaRef{modality: modality, url: url, urlMap: inner}, true, ""
+}
+
 // mediaPartIsWellFormed reports whether partMap carries the fields
 // replace_media_urls needs to produce a MultimodalEntry for it.
 //
@@ -77,19 +109,13 @@ var partTypeModality = map[string]string{
 // pair the Nth entry of a modality with the Nth part of that modality.
 // If a bad part is dropped here but kept there (or the other way
 // around), the pairing shifts and the wrong bytes get attached to the
-// wrong entry.
+// wrong entry. That is why this delegates to classifyMediaPart rather
+// than restating the rule: replace_media_urls, which fixes the order,
+// runs the same code as the walkers that follow it.
 //
 // Other files point back to this comment instead of repeating it.
 func mediaPartIsWellFormed(partMap map[string]any, partType string) bool {
-	inner, ok := partMap[partType].(map[string]any)
-	if !ok {
-		return false
-	}
-	if partType == inputAudioPartType {
-		data, _ := inner["data"].(string)
-		return data != ""
-	}
-	_, ok = inner["url"].(string)
+	_, ok, _ := classifyMediaPart(partMap, partType, partTypeModality[partType])
 	return ok
 }
 
@@ -260,50 +286,15 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			if !isMedia {
 				continue
 			}
-			if partType == inputAudioPartType {
-				innerMap, ok := partMap[inputAudioPartType].(map[string]any)
-				if !ok {
-					logger.V(logutil.DEBUG).Info("skipping malformed media part: inner object missing or wrong type",
-						"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
-					continue
-				}
-				data, _ := innerMap["data"].(string)
-				if data == "" {
-					logger.V(logutil.DEBUG).Info("skipping malformed media part: data is empty or not a string",
-						"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
-					continue
-				}
-				format, _ := innerMap["format"].(string)
-				refs = append(refs, mediaRef{
-					msgIdx:   msgIdx,
-					partIdx:  partIdx,
-					modality: modality,
-					isInline: true,
-					data:     data,
-					format:   format,
-				})
-				continue
-			}
-			// URL-based parts: image_url, audio_url, video_url
-			innerMap, ok := partMap[partType].(map[string]any)
+			ref, ok, reason := classifyMediaPart(partMap, partType, modality)
 			if !ok {
-				logger.V(logutil.DEBUG).Info("skipping malformed media part: inner object missing or wrong type",
-					"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
+				logger.V(logutil.DEBUG).Info("skipping malformed media part",
+					"reason", reason, "msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
 				continue
 			}
-			url, ok := innerMap["url"].(string)
-			if !ok {
-				logger.V(logutil.DEBUG).Info("skipping malformed media part: url is missing or not a string",
-					"msg_index", msgIdx, "part_index", partIdx, "part_type", partType)
-				continue
-			}
-			refs = append(refs, mediaRef{
-				msgIdx:   msgIdx,
-				partIdx:  partIdx,
-				modality: modality,
-				url:      url,
-				urlMap:   innerMap,
-			})
+			ref.msgIdx = msgIdx
+			ref.partIdx = partIdx
+			refs = append(refs, ref)
 		}
 	}
 

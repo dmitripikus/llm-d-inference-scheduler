@@ -302,6 +302,67 @@ func TestReplaceMediaURLsStep_MixedHTTPAndDataURIOrdering(t *testing.T) {
 	}
 }
 
+// Execute and mediaPartIsWellFormed must agree on exactly which parts count.
+// Execute fixes the entry order that the encode fanout and decode.injectUUIDs
+// later index into, and those two use the predicate, so a part accepted by one
+// and rejected by the other shifts the pairing. Both now run classifyMediaPart;
+// this asserts the agreement end to end rather than trusting that they still
+// do. Every malformed shape and every recognized part type is represented.
+func TestReplaceMediaURLsStep_ExecuteAgreesWithWellFormedPredicate(t *testing.T) {
+	parts := []any{
+		map[string]any{"type": "text", "text": "hi"},
+		// image_url: one good, then every way to be malformed.
+		map[string]any{"type": imageURLPartType, imageURLPartType: map[string]any{"url": "data:image/png;base64,aGk="}},
+		map[string]any{"type": imageURLPartType},
+		map[string]any{"type": imageURLPartType, imageURLPartType: map[string]any{}},
+		map[string]any{"type": imageURLPartType, imageURLPartType: map[string]any{"url": 123}},
+		// audio_url, including a non-object inner.
+		map[string]any{"type": audioURLPartType, audioURLPartType: map[string]any{"url": "data:audio/wav;base64,aGk="}},
+		map[string]any{"type": audioURLPartType, audioURLPartType: "not-an-object"},
+		// input_audio is inline and keyed on data, not url.
+		map[string]any{"type": inputAudioPartType, inputAudioPartType: map[string]any{"data": "aGk=", "format": "wav"}},
+		map[string]any{"type": inputAudioPartType, inputAudioPartType: map[string]any{"data": "", "format": "wav"}},
+		map[string]any{"type": inputAudioPartType, inputAudioPartType: map[string]any{"format": "wav"}},
+		map[string]any{"type": videoURLPartType, videoURLPartType: map[string]any{"url": "data:video/mp4;base64,aGk="}},
+		// Recognized by neither: passed through untouched.
+		map[string]any{"type": "image_embeds", "image_embeds": map[string]any{}},
+	}
+
+	// What the predicate says the answer is, walking the same body Execute does.
+	var wantModalities []string
+	for _, part := range parts {
+		partMap := part.(map[string]any)
+		partType, _ := partMap["type"].(string)
+		modality, isMedia := partTypeModality[partType]
+		if isMedia && mediaPartIsWellFormed(partMap, partType) {
+			wantModalities = append(wantModalities, modality)
+		}
+	}
+	// Guard the guard: a typo that made every part malformed would otherwise
+	// let this test pass with both sides at zero.
+	if len(wantModalities) != 4 {
+		t.Fatalf("fixture drift: predicate accepted %d parts, want 4 (%v)", len(wantModalities), wantModalities)
+	}
+
+	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{})
+	reqCtx := &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{map[string]any{"role": "user", "content": parts}},
+		},
+	}
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var gotModalities []string
+	for _, e := range reqCtx.MultimodalEntries {
+		gotModalities = append(gotModalities, e.Modality)
+	}
+	if !equalStringSlices(gotModalities, wantModalities) {
+		t.Errorf("Execute produced modalities %v, predicate expects %v", gotModalities, wantModalities)
+	}
+}
+
 // encodeDataURI streams into a strings.Builder instead of encoding to a string
 // and concatenating, so it must still agree with the obvious implementation
 // byte for byte. Payload lengths 0-4 cover every base64 padding case, which is
