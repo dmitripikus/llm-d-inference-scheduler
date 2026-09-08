@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -842,14 +841,66 @@ func TestEncodeStep_MissingMediaPartFails(t *testing.T) {
 	}
 }
 
-// TestEncodeStep_MixedModalityFanout drives the full encode step with a
-// mixed-modality request. Each entry produces one fanout sub-request; each
-// sub-request carries the correct modality-keyed feature map and the
-// matching content part in messages[0].content.
-func TestEncodeStep_MixedModalityFanout(t *testing.T) {
-	var seq atomic.Int32
-	captured := make(map[string]map[string]any) // request-body seq -> parsed body
+// fanoutPairing is what one encode sub-request says about the entry it was
+// built for: the single modality key under mm_hashes, the hash filed under
+// it, the content part's type, and the payload that part carries.
+type fanoutPairing struct {
+	modality string
+	hash     string
+	partType string
+	payload  string
+}
+
+// readFanoutPairing extracts the pairing a single encode sub-request body
+// asserts. A sub-request carries exactly one entry, so mm_hashes must hold
+// exactly one modality key with exactly one hash, and content exactly one
+// part. Anything else is itself a failure.
+func readFanoutPairing(t *testing.T, body map[string]any) fanoutPairing {
+	t.Helper()
+	tokens, _ := body["tokens"].(map[string]any)
+	features, _ := tokens["features"].(map[string]any)
+	hashes, _ := features["mm_hashes"].(map[string]any)
+	if len(hashes) != 1 {
+		t.Fatalf("sub-request must carry exactly one modality key, got %v", hashes)
+	}
+	var got fanoutPairing
+	for mod, raw := range hashes {
+		list, _ := raw.([]any)
+		if len(list) != 1 {
+			t.Fatalf("mm_hashes[%q] must carry exactly one hash, got %v", mod, raw)
+		}
+		got.modality = mod
+		got.hash, _ = list[0].(string)
+	}
+
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("sub-request must carry exactly one message, got %v", msgs)
+	}
+	content, _ := msgs[0].(map[string]any)["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("sub-request must carry exactly one content part, got %v", content)
+	}
+	part, _ := content[0].(map[string]any)
+	got.partType, _ = part["type"].(string)
+	inner, _ := part[got.partType].(map[string]any)
+	// URL-based parts carry the payload under "url", input_audio under "data".
+	if url, ok := inner["url"].(string); ok {
+		got.payload = url
+	} else {
+		got.payload, _ = inner["data"].(string)
+	}
+	return got
+}
+
+// captureFanout runs the encode step against a recording backend and returns
+// the pairing each sub-request carried, keyed by hash. Keying by hash is what
+// makes a mispairing visible: the hash names the entry the sub-request was
+// built for, so the part beside it must be that entry's part.
+func captureFanout(t *testing.T, reqCtx *pipeline.RequestContext) map[string]fanoutPairing {
+	t.Helper()
 	var mu sync.Mutex
+	pairings := make(map[string]fanoutPairing)
 	encoderBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -857,9 +908,9 @@ func TestEncodeStep_MixedModalityFanout(t *testing.T) {
 		}
 		var parsed map[string]any
 		_ = json.Unmarshal(body, &parsed)
-		i := int(seq.Add(1) - 1)
+		got := readFanoutPairing(t, parsed)
 		mu.Lock()
-		captured[fmt.Sprintf("req-%d", i)] = parsed
+		pairings[got.hash] = got
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -874,6 +925,39 @@ func TestEncodeStep_MixedModalityFanout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEncodeStep: %v", err)
 	}
+	if err := encodeStep.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	return pairings
+}
+
+// assertPairings checks every expected hash reached the encoder beside its own
+// modality key, part type, and payload, and that nothing extra arrived.
+func assertPairings(t *testing.T, got map[string]fanoutPairing, want []fanoutPairing) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("expected %d distinct fanout sub-requests, got %d: %+v", len(want), len(got), got)
+	}
+	for _, w := range want {
+		g, ok := got[w.hash]
+		if !ok {
+			t.Errorf("no fanout sub-request carried hash %q", w.hash)
+			continue
+		}
+		if g != w {
+			t.Errorf("hash %q paired with %+v, want %+v", w.hash, g, w)
+		}
+	}
+}
+
+// TestEncodeStep_MixedModalityFanout drives the full encode step with a
+// mixed-modality request. Each entry produces one fanout sub-request, and the
+// assertion is per sub-request: the hash, the modality key it sits under, and
+// the media bytes beside it must all belong to the same entry. Checking only
+// that every modality and every part type appeared somewhere across the
+// sub-requests would pass on any permutation of them, which is the failure
+// this guards (see mediaPartIsWellFormed).
+func TestEncodeStep_MixedModalityFanout(t *testing.T) {
 	reqCtx := &pipeline.RequestContext{
 		RequestID:    "mixed-fanout",
 		Model:        "llama-3",
@@ -901,40 +985,52 @@ func TestEncodeStep_MixedModalityFanout(t *testing.T) {
 		KVTransferParams: make(map[string]any),
 	}
 
-	if err := encodeStep.Execute(context.Background(), reqCtx); err != nil {
-		t.Fatalf("encode failed: %v", err)
+	assertPairings(t, captureFanout(t, reqCtx), []fanoutPairing{
+		{modality: ModalityImage, hash: "img-hash", partType: "image_url", payload: "data:image/jpeg;base64,IMG"},
+		{modality: ModalityAudio, hash: "aud-hash", partType: "audio_url", payload: "data:audio/wav;base64,AUD"},
+		{modality: ModalityVideo, hash: "vid-hash", partType: "video_url", payload: "data:video/mp4;base64,VID"},
+	})
+}
+
+// TestEncodeStep_WithinModalityFanoutPairing covers the pairing case a
+// cross-modality test cannot reach: two audio entries in one request, one
+// carried as audio_url and one as input_audio. Both share the audio modality
+// key, so only the per-modality local index distinguishes them, and a request
+// mixing the two part types is the case where a local-index regression sends
+// one entry's hash with the other entry's bytes.
+func TestEncodeStep_WithinModalityFanoutPairing(t *testing.T) {
+	reqCtx := &pipeline.RequestContext{
+		RequestID:    "within-modality-fanout",
+		Model:        "llama-3",
+		OriginalPath: gateway.PathChatCompletions,
+		TokenIDs:     []int{1, 32000, 32000, 32000, 2345},
+		Body: map[string]any{
+			"model":  "llama-3",
+			"stream": false,
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						// Walker order: inline audio, then image, then audio URL.
+						// The audio entries are non-adjacent on purpose.
+						map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "INLINE-AUD", "format": "wav"}},
+						map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/jpeg;base64,IMG"}},
+						map[string]any{"type": "audio_url", "audio_url": map[string]any{"url": "data:audio/wav;base64,URL-AUD"}},
+					},
+				},
+			},
+		},
+		MultimodalEntries: []pipeline.MultimodalEntry{
+			{Modality: ModalityAudio, Hash: "aud-inline-hash", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 1}},
+			{Modality: ModalityImage, Hash: "img-hash", Placeholder: pipeline.PlaceholderRange{Offset: 2, Length: 1}},
+			{Modality: ModalityAudio, Hash: "aud-url-hash", Placeholder: pipeline.PlaceholderRange{Offset: 3, Length: 1}},
+		},
+		KVTransferParams: make(map[string]any),
 	}
 
-	if seq.Load() != 3 {
-		t.Fatalf("expected 3 fanout requests, got %d", seq.Load())
-	}
-	// Collect the modality keys we saw across the three requests, one per
-	// entry, keyed by its modality.
-	sawKeys := map[string]bool{}
-	sawTypes := map[string]bool{}
-	for _, body := range captured {
-		tokens, _ := body["tokens"].(map[string]any)
-		features, _ := tokens["features"].(map[string]any)
-		hashes, _ := features["mm_hashes"].(map[string]any)
-		for k := range hashes {
-			sawKeys[k] = true
-		}
-		msgs, _ := body["messages"].([]any)
-		content, _ := msgs[0].(map[string]any)["content"].([]any)
-		if part, ok := content[0].(map[string]any); ok {
-			if pt, ok := part["type"].(string); ok {
-				sawTypes[pt] = true
-			}
-		}
-	}
-	for _, m := range []string{ModalityImage, ModalityAudio, ModalityVideo} {
-		if !sawKeys[m] {
-			t.Errorf("no fanout request carried mm_hashes[%q]", m)
-		}
-	}
-	for _, pt := range []string{"image_url", "audio_url", "video_url"} {
-		if !sawTypes[pt] {
-			t.Errorf("no fanout content used type=%q", pt)
-		}
-	}
+	assertPairings(t, captureFanout(t, reqCtx), []fanoutPairing{
+		{modality: ModalityAudio, hash: "aud-inline-hash", partType: "input_audio", payload: "INLINE-AUD"},
+		{modality: ModalityImage, hash: "img-hash", partType: "image_url", payload: "data:image/jpeg;base64,IMG"},
+		{modality: ModalityAudio, hash: "aud-url-hash", partType: "audio_url", payload: "data:audio/wav;base64,URL-AUD"},
+	})
 }
