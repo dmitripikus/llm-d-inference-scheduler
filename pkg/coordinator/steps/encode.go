@@ -124,16 +124,20 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 		g.Go(func() error {
 			tokenIDs := s.buildEncodeTokenIDs(reqCtx.TokenIDs, entry)
 
-			body, usedFallback := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod, logger)
-			if usedFallback {
-				// A fallback means entries and parts got out of line
-				// upstream (see mediaPartIsWellFormed). The encoder will
-				// reject the empty-URL sub-request loudly; log the miss
-				// here so a debugger can trace it back to the coordinator.
-				logger.V(logutil.DEBUG).Info("no media part for entry, using empty-URL fallback",
+			body, err := s.buildEncodeBody(reqCtx, tokenIDs, entry, localIdx, format, partsByMod, logger)
+			if err != nil {
+				// Entries and parts got out of line upstream (see
+				// mediaPartIsWellFormed). Both are built from the same
+				// request by the same rule, so this is a coordinator bug,
+				// not bad client input: fail here rather than send the
+				// encoder a request we already know is wrong.
+				err = fmt.Errorf("encode[%d]: %w", i, err)
+				logger.Error(err, "encode fanout entry has no media part",
+					"index", i,
 					"modality", mod,
 					"local_index", localIdx,
 					"parts_available", len(partsByMod[mod]))
+				return err
 			}
 
 			bodyBytes, err := json.Marshal(body)
@@ -217,12 +221,15 @@ func (s *EncodeStep) buildEncodeTokenIDs(fullTokenIDs []int, entry pipeline.Mult
 	return tokenIDs
 }
 
-func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any, logger logr.Logger) (body map[string]any, usedFallback bool) {
+func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, localIdx int, format gateway.RequestFormat, partsByMod map[string][]map[string]any, logger logr.Logger) (map[string]any, error) {
 	mod := entryModality(entry, logger)
 	placeholder := map[string]any{"offset": 1, "length": entry.Placeholder.Length}
 	switch format {
 	case gateway.FormatChatCompletions:
-		mediaContent, fallback := buildSingleMediaContent(partsByMod, mod, localIdx)
+		mediaContent, err := buildSingleMediaContent(partsByMod, mod, localIdx)
+		if err != nil {
+			return nil, err
+		}
 		body := map[string]any{
 			"model": reqCtx.Model,
 			"messages": []any{
@@ -240,7 +247,7 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 			},
 		}
 		capSingleTokenOutput(body, format)
-		return body, fallback
+		return body, nil
 	default:
 		body := map[string]any{
 			"model":     reqCtx.Model,
@@ -252,7 +259,7 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 			},
 		}
 		capSingleTokenOutput(body, format)
-		return body, false
+		return body, nil
 	}
 }
 
@@ -294,45 +301,27 @@ func collectMediaParts(body map[string]any) map[string][]map[string]any {
 	return partsByMod
 }
 
-// modalityFallbackPartType names the URL-shaped content-part type used
-// for the buildSingleMediaContent fallback when localIdx is out of range.
-// Keying by modality keeps the emitted sub-request self-consistent, an
-// audio fanout entry does not get shipped inside an image_url part.
-var modalityFallbackPartType = map[string]string{
-	ModalityImage: imageURLPartType,
-	ModalityAudio: audioURLPartType,
-	ModalityVideo: videoURLPartType,
-}
-
 // buildSingleMediaContent returns the OpenAI content-part representing the
 // entry at (modality, localIdx) in the per-modality parts map. It emits
 // the part verbatim in its native shape, {type: <partType>, <partType>:
 // <innerMap>}, so a caller can drop the returned map directly into an
 // encode sub-request's messages[0].content slice.
 //
-// If localIdx is out of range, an empty-shaped URL part of the matching
-// modality is returned and usedFallback is true. That path means entries
-// and parts got out of line (see mediaPartIsWellFormed); the fallback
-// keeps the sub-request self-consistent so the encoder rejects it loudly.
-// Callers log the miss (see EncodeStep.Execute).
-func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality string, localIdx int) (content map[string]any, usedFallback bool) {
+// An out-of-range localIdx means entries and parts got out of line (see
+// mediaPartIsWellFormed) and returns an error. There is nothing useful to
+// send in that case: the entry's bytes are exactly what the encoder needs
+// and they are not there.
+func buildSingleMediaContent(partsByMod map[string][]map[string]any, modality string, localIdx int) (map[string]any, error) {
 	parts := partsByMod[modality]
 	if localIdx < 0 || localIdx >= len(parts) {
-		partType, ok := modalityFallbackPartType[modality]
-		if !ok {
-			partType = imageURLPartType
-		}
-		return map[string]any{
-			"type":   partType,
-			partType: map[string]any{"url": ""},
-		}, true
+		return nil, fmt.Errorf("no %s media part at index %d, request has %d", modality, localIdx, len(parts))
 	}
 	p := parts[localIdx]
 	partType, _ := p["type"].(string)
 	return map[string]any{
 		"type":   partType,
 		partType: p[partType],
-	}, false
+	}, nil
 }
 
 type encodeResponse struct {

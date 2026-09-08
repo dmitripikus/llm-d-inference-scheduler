@@ -19,10 +19,12 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -740,9 +742,9 @@ func TestBuildSingleMediaContent_PerModality(t *testing.T) {
 		{"video_url", ModalityVideo, 0, "video_url", "video_url"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, usedFallback := buildSingleMediaContent(partsByMod, tc.modality, tc.localIdx)
-			if usedFallback {
-				t.Errorf("in-range lookup should not use fallback")
+			got, err := buildSingleMediaContent(partsByMod, tc.modality, tc.localIdx)
+			if err != nil {
+				t.Fatalf("in-range lookup returned error: %v", err)
 			}
 			if got["type"] != tc.wantType {
 				t.Errorf("type = %v, want %q", got["type"], tc.wantType)
@@ -754,12 +756,12 @@ func TestBuildSingleMediaContent_PerModality(t *testing.T) {
 	}
 }
 
-// TestBuildSingleMediaContent_OutOfRangeFallback asserts a bug-safe empty
-// URL part of the matching modality is returned when localIdx is out of
-// range. The path is not expected to run under correct entry<->part
-// pairing; the fallback must at least keep the emitted sub-request
-// self-consistent (audio entry -> audio part shape).
-func TestBuildSingleMediaContent_OutOfRangeFallback(t *testing.T) {
+// TestBuildSingleMediaContent_OutOfRangeErrors asserts an out-of-range
+// localIdx is an error rather than a stand-in content part. The path only
+// runs when entries and parts got out of line upstream, which is a
+// coordinator bug; there is nothing worth sending the encoder in that
+// case, and the error names the modality so the miss is traceable.
+func TestBuildSingleMediaContent_OutOfRangeErrors(t *testing.T) {
 	partsByMod := map[string][]map[string]any{
 		ModalityImage: {
 			{"type": "image_url", "image_url": map[string]any{"url": "u0"}},
@@ -768,30 +770,75 @@ func TestBuildSingleMediaContent_OutOfRangeFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		modality string
-		wantType string
+		localIdx int
 	}{
-		{"image", ModalityImage, imageURLPartType},
-		{"audio", ModalityAudio, audioURLPartType},
-		{"video", ModalityVideo, videoURLPartType},
+		{"image past end", ModalityImage, 99},
+		{"audio absent", ModalityAudio, 0},
+		{"video absent", ModalityVideo, 0},
+		{"negative index", ModalityImage, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// 99 is out of range for every modality in partsByMod, so the
-			// fallback path runs regardless of which modality is under test.
-			got, usedFallback := buildSingleMediaContent(partsByMod, tc.modality, 99)
-			if !usedFallback {
-				t.Errorf("out-of-range lookup should signal fallback")
+			got, err := buildSingleMediaContent(partsByMod, tc.modality, tc.localIdx)
+			if err == nil {
+				t.Fatalf("expected error, got content %+v", got)
 			}
-			if got["type"] != tc.wantType {
-				t.Errorf("type = %v, want %q", got["type"], tc.wantType)
+			if got != nil {
+				t.Errorf("expected nil content alongside the error, got %+v", got)
 			}
-			inner, ok := got[tc.wantType].(map[string]any)
-			if !ok {
-				t.Fatalf("inner key %q missing or wrong type: %+v", tc.wantType, got)
-			}
-			if inner["url"] != "" {
-				t.Errorf("fallback url = %v, want empty", inner["url"])
+			if !strings.Contains(err.Error(), tc.modality) {
+				t.Errorf("error %q should name the modality %q", err, tc.modality)
 			}
 		})
+	}
+}
+
+// TestEncodeStep_MissingMediaPartFails drives the full step with one more
+// entry than the request has media parts, the shape of an entry<->part
+// pairing bug. The fanout must fail instead of sending the encoder a
+// sub-request with no media in it.
+func TestEncodeStep_MissingMediaPartFails(t *testing.T) {
+	// The well-formed entry may or may not reach the encoder before the
+	// broken one fails the group, so this only has to answer plausibly.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	gwClient := gateway.New(config.GatewayConfig{Address: server.URL})
+	step, err := NewEncodeStep(gwClient, map[string]any{"use_openai_format": true})
+	if err != nil {
+		t.Fatalf("NewEncodeStep: %v", err)
+	}
+	reqCtx := &pipeline.RequestContext{
+		RequestID:    "missing-part",
+		Model:        "llama-3",
+		OriginalPath: gateway.PathChatCompletions,
+		TokenIDs:     []int{1, 32000, 2345},
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{"role": "user", "content": []any{
+					map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,IMG"}},
+				}},
+			},
+		},
+		// Two entries, one part: the second has nothing to pair with.
+		MultimodalEntries: []pipeline.MultimodalEntry{
+			{Index: 0, Modality: ModalityImage, Hash: "h0", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 1}},
+			{Index: 1, Modality: ModalityImage, Hash: "h1", Placeholder: pipeline.PlaceholderRange{Offset: 1, Length: 1}},
+		},
+		KVTransferParams: make(map[string]any),
+	}
+
+	err = step.Execute(context.Background(), reqCtx)
+	if err == nil {
+		t.Fatal("expected an error when an entry has no media part")
+	}
+	if !strings.Contains(err.Error(), "no image media part") {
+		t.Errorf("error should name the missing part, got %v", err)
+	}
+	if errors.Is(err, pipeline.ErrBadRequest) {
+		t.Error("a coordinator pairing bug is not a client error; expected no ErrBadRequest")
 	}
 }
 
