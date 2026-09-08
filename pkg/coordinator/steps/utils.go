@@ -18,6 +18,7 @@ package steps
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -139,16 +140,25 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, log
 	return features
 }
 
+// errEmptyModality marks a MultimodalEntry that reached a reader with no
+// Modality set. Both production producers (replace_media_urls,
+// extractMultimodalEntries) always set the field, so this is a coordinator
+// bug rather than anything a client can cause.
+var errEmptyModality = errors.New("MultimodalEntry has empty Modality, defaulting to image")
+
 // entryModality returns the entry's Modality with an empty-string fallback
-// to ModalityImage. Production entry producers (replace_media_urls,
-// extractMultimodalEntries) always set Modality; the fallback covers
-// callers that construct entries directly without setting the field so
-// they do not silently produce a "" modality key. A production entry
-// reaching the fallback is a coordinator invariant break, so log at
-// DEBUG on the default branch to make a real occurrence discoverable.
+// to ModalityImage, so a caller that built an entry without setting the
+// field does not produce a "" modality key.
+//
+// The fallback is not benign: it groups the entry under image everywhere
+// (mm_hashes, the encode fanout, render's per-modality slots), so a
+// mis-tagged entry pairs with the wrong part and the failure surfaces far
+// from here, as an encoder rejection. Log through logger.Error, which is
+// emitted at any verbosity, so an occurrence is visible in production
+// rather than only under debug logging.
 func entryModality(entry pipeline.MultimodalEntry, logger logr.Logger) string {
 	if entry.Modality == "" {
-		logger.V(logutil.DEBUG).Info("MultimodalEntry has empty Modality; defaulting to image",
+		logger.Error(errEmptyModality, "unexpected multimodal entry",
 			"hash", entry.Hash, "index", entry.Index)
 		return ModalityImage
 	}

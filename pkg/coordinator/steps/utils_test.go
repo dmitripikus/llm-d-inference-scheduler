@@ -661,6 +661,37 @@ func TestBuildMMFeatures_GroupsByModality(t *testing.T) {
 	}
 }
 
+// TestEntryModality_EmptyLogsError covers the defensive branch: an entry
+// with no Modality still resolves to image, but the miss is reported via
+// logger.Error so it shows up at production verbosity. Logged at DEBUG it
+// was invisible, and the only symptom was an encoder rejection much later,
+// after the entry had been grouped under the wrong modality.
+func TestEntryModality_EmptyLogsError(t *testing.T) {
+	sink := &logCaptureSink{}
+	entry := pipeline.MultimodalEntry{Index: 3, Hash: "h3"}
+
+	if got := entryModality(entry, logr.New(sink)); got != ModalityImage {
+		t.Errorf("entryModality = %q, want %q", got, ModalityImage)
+	}
+	if len(sink.errors) != 1 {
+		t.Fatalf("expected 1 error log, got %d (infos: %d)", len(sink.errors), len(sink.infos))
+	}
+	if !errors.Is(sink.errors[0].err, errEmptyModality) {
+		t.Errorf("logged error = %v, want errEmptyModality", sink.errors[0].err)
+	}
+
+	// A populated Modality is the normal path and must stay silent.
+	quiet := &logCaptureSink{}
+	entry.Modality = ModalityAudio
+	if got := entryModality(entry, logr.New(quiet)); got != ModalityAudio {
+		t.Errorf("entryModality = %q, want %q", got, ModalityAudio)
+	}
+	if len(quiet.errors) != 0 || len(quiet.infos) != 0 {
+		t.Errorf("expected no logs for a well-formed entry, got %d errors / %d infos",
+			len(quiet.errors), len(quiet.infos))
+	}
+}
+
 // TestExtractMultimodalEntries_MultiModalityResponse feeds a synthetic
 // response carrying both image and audio feature slices and asserts entries
 // come back tagged with the right modality and in a deterministic order
