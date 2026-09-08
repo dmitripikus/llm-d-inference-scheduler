@@ -1711,6 +1711,102 @@ func TestReplaceMediaURLsStep_AudioDataURI(t *testing.T) {
 	}
 }
 
+// dataURIReqCtx builds a one-part request whose URL slot of the given part
+// type carries a data URI of the given media type and base64 payload.
+func dataURIReqCtx(partType, mediaType, b64 string) *pipeline.RequestContext {
+	return &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":   partType,
+							partType: map[string]any{"url": "data:" + mediaType + ";base64," + b64},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestReplaceMediaURLsStep_AudioVideoDataURI_RejectsOversized covers the
+// per-modality cap applying to bytes that arrive inline in a URL slot, not
+// only to bytes pulled over the network. The same payload sent as input_audio
+// is rejected by validateInlineAudio, so accepting it here would let the two
+// ways of sending one audio clip disagree.
+func TestReplaceMediaURLsStep_AudioVideoDataURI_RejectsOversized(t *testing.T) {
+	// 1 MB cap allows ~1_398_101 base64 chars; go well past it.
+	oversized := strings.Repeat("A", 2*1024*1024)
+	for _, tc := range []struct {
+		name      string
+		partType  string
+		mediaType string
+	}{
+		{"audio_url", "audio_url", testAudioWAVMIME},
+		{"video_url", "video_url", testVideoMP4MIME},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			step, err := NewReplaceMediaURLsStep(nil, map[string]any{"max_download_size": 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reqCtx := dataURIReqCtx(tc.partType, tc.mediaType, oversized)
+			err = step.Execute(context.Background(), reqCtx)
+			if err == nil {
+				t.Fatalf("expected error for oversized %s data URI", tc.partType)
+			}
+			if !errors.Is(err, pipeline.ErrBadRequest) {
+				t.Fatalf("expected ErrBadRequest, got %v", err)
+			}
+			if len(reqCtx.MultimodalEntries) != 0 {
+				t.Fatalf("rejected request must not seed entries, got %d", len(reqCtx.MultimodalEntries))
+			}
+		})
+	}
+}
+
+// TestReplaceMediaURLsStep_AudioDataURI_UsesAudioCap checks the data URI bound
+// reads the per-modality override rather than the global default: a payload
+// over the 1 MB global cap is accepted once the audio cap is raised.
+func TestReplaceMediaURLsStep_AudioDataURI_UsesAudioCap(t *testing.T) {
+	payload := strings.Repeat("A", 2*1024*1024) // ~1.5 MB decoded
+	step, err := NewReplaceMediaURLsStep(nil, map[string]any{
+		"max_download_size":       1,
+		"max_audio_download_size": 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := dataURIReqCtx("audio_url", testAudioWAVMIME, payload)
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("audio cap of 8 MB must accept a ~1.5 MB payload: %v", err)
+	}
+	if len(reqCtx.MultimodalEntries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(reqCtx.MultimodalEntries))
+	}
+}
+
+// TestReplaceMediaURLsStep_ImageDataURI_ExemptFromSizeCap pins the deliberate
+// exemption in enforceInlineSize. Image data URIs have never been size-checked
+// here, so the cap must not start rejecting bodies that server's
+// max_request_body_size already bounds.
+func TestReplaceMediaURLsStep_ImageDataURI_ExemptFromSizeCap(t *testing.T) {
+	oversized := strings.Repeat("A", 2*1024*1024)
+	step, err := NewReplaceMediaURLsStep(nil, map[string]any{"max_download_size": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := dataURIReqCtx("image_url", testImagePNGMIME, oversized)
+	if err := step.Execute(context.Background(), reqCtx); err != nil {
+		t.Fatalf("image data URI must stay exempt from the size cap, got %v", err)
+	}
+	if len(reqCtx.MultimodalEntries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(reqCtx.MultimodalEntries))
+	}
+}
+
 // TestReplaceMediaURLsStep_VideoDataURI mirrors the audio data URI case.
 func TestReplaceMediaURLsStep_VideoDataURI(t *testing.T) {
 	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{})

@@ -150,27 +150,40 @@ pipeline:
         # can name hundreds of URLs. Raise a per-modality cap below only together
         # with max_multimodal_entries.
         #
-        # data: URIs do not hit the network and are unaffected. This value is
-        # the global default; each modality below may override it. Default 10 MB.
+        # This value is the global default; each modality below may override
+        # it. Default 10 MB.
+        #
+        # Which payloads each cap covers differs by modality, because the image
+        # path predates the audio and video ones and keeps its behavior:
+        #
+        #   image  http(s) downloads only. An image data: URI is not
+        #          size-checked; server.max_request_body_size bounds it.
+        #   audio  http(s) downloads, audio_url data: URIs, and input_audio
+        #          inline payloads.
+        #   video  http(s) downloads and video_url data: URIs.
+        #
+        # Inline payloads are bounded on their base64 length, before any
+        # decode, so an oversized item is rejected without being allocated.
         # max_download_size: 10
 
         # max_image_download_size overrides max_download_size specifically for
-        # image_url items. Same units (MB), same overflow validation.
+        # image_url items. Same units (MB), same overflow validation. Applies
+        # to http(s) downloads only; see max_download_size for which payloads
+        # each modality's cap covers.
         # max_image_download_size: 10
 
         # max_audio_download_size overrides max_download_size for audio_url
-        # items and for input_audio inline payloads (checked against the
-        # decoded byte count implied by the base64 length). Audio codec
-        # decoders historically carry more CVEs than image decoders; keep
-        # this cap tight until your security team has reviewed the audio
-        # decode path end-to-end.
+        # items, including audio_url data: URIs, and for input_audio inline
+        # payloads. Audio codec decoders historically carry more CVEs than
+        # image decoders; keep this cap tight until your security team has
+        # reviewed the audio decode path end-to-end.
         # max_audio_download_size: 60
 
         # max_video_download_size overrides max_download_size for video_url
-        # items. Videos routinely need 100+ MB per clip; leave commented out
-        # only if your deployment truly does not accept video. See
-        # max_audio_download_size for the codec-CVE caveat that also
-        # applies here.
+        # items, including video_url data: URIs. Videos routinely need 100+ MB
+        # per clip; leave commented out only if your deployment truly does not
+        # accept video. See max_audio_download_size for the codec-CVE caveat
+        # that also applies here.
         # max_video_download_size: 200
 
         # allowed_{image,audio,video}_content_types below each REPLACE the

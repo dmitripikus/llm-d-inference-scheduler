@@ -347,12 +347,16 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		if isDataURI(ref.url) {
 			// Validate only. The slot is already the payload, so there is
 			// nothing to rewrite and nothing worth retaining.
-			contentType, _, err := parseDataURI(ref.url)
+			contentType, b64, err := parseDataURI(ref.url)
 			if err != nil {
 				return fmt.Errorf("parsing data URI at message %d part %d: %w: %w", ref.msgIdx, ref.partIdx, err, pipeline.ErrBadRequest)
 			}
 			if !s.allowedContentTypeForModality(contentType, ref.modality) {
 				return fmt.Errorf("data URI content type %q not allowed for %s at message %d part %d: %w", contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
+			}
+			if s.enforceInlineSize(ref.modality) && s.inlineSizeExceeded(b64, ref.modality) {
+				return fmt.Errorf("data URI at message %d part %d exceeds size limit for %s: %w",
+					ref.msgIdx, ref.partIdx, ref.modality, pipeline.ErrBadRequest)
 			}
 			continue
 		}
@@ -420,17 +424,43 @@ func (s *ReplaceMediaURLsStep) validateInlineAudio(ref mediaRef) error {
 		return fmt.Errorf("input_audio content type %q not allowed at message %d part %d: %w",
 			contentType, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 	}
-	// Reject on the length of the base64 string, before decoding, so an
-	// oversized payload is never allocated. It is an allocation bound, not a
-	// byte-exact limit: when the cap is not a multiple of 3, a string right at
-	// the bound decodes to up to 2 bytes over. That slack is fine, bounding
-	// the allocation is the point. input_audio is capped by the audio modality.
-	sizeCap := s.downloadSizeFor(ref.modality)
-	if int64(len(ref.data)) > base64LenForBytes(sizeCap) {
+	// input_audio is capped by the audio modality.
+	if s.inlineSizeExceeded(ref.data, ref.modality) {
 		return fmt.Errorf("input_audio at message %d part %d exceeds size limit: %w",
 			ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 	}
 	return nil
+}
+
+// inlineSizeExceeded reports whether a base64 payload that arrived inline in
+// the request body is larger than the modality's cap allows.
+//
+// The bound is on the length of the base64 string, checked before any decode,
+// so an oversized payload is never allocated. It is an allocation bound, not a
+// byte-exact limit: when the cap is not a multiple of 3, a string right at the
+// bound decodes to up to 2 bytes over. That slack is fine, bounding the
+// allocation is the point.
+func (s *ReplaceMediaURLsStep) inlineSizeExceeded(b64, modality string) bool {
+	return int64(len(b64)) > base64LenForBytes(s.downloadSizeFor(modality))
+}
+
+// enforceInlineSize reports whether the per-modality cap is applied to a data
+// URI in a URL slot, whose bytes arrive in the request body instead of over
+// the network.
+//
+// Audio and video are enforced. The caps exist to bound what a single request
+// holds in memory, and a 200 MB clip costs the same whether it was downloaded
+// or pasted into the body. Leaving data URIs out would also make the two ways
+// of sending the same audio disagree: input_audio, which is only ever inline,
+// is capped by validateInlineAudio.
+//
+// Images are not enforced, for the reason enforceDownloadContentType leaves
+// them out of the Content-Type check: image data URIs have never been
+// size-checked here, so applying the cap would start rejecting requests
+// between max_image_download_size and server.max_request_body_size that are
+// accepted. server.max_request_body_size is what bounds those.
+func (s *ReplaceMediaURLsStep) enforceInlineSize(modality string) bool {
+	return modality != ModalityImage
 }
 
 // base64LenForBytes returns the padded-base64 encoded length of a sizeCap-byte
