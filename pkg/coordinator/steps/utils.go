@@ -120,7 +120,14 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, log
 	}
 	hashesByMod := make(map[string][]string)
 	placeholdersByMod := make(map[string][]any)
-	kwargsByMod := make(map[string][]any)
+	// Left nil unless the caller asked for kwargs_data. The decode and
+	// conditional-decode bodies never carry it, and building it there would
+	// allocate a map, a slice per modality, and a boxed value per entry on
+	// every multimodal request.
+	var kwargsByMod map[string][]any
+	if includeKwargs {
+		kwargsByMod = make(map[string][]any)
+	}
 	for _, entry := range entries {
 		mod := entryModality(entry, logger)
 		hashesByMod[mod] = append(hashesByMod[mod], entry.Hash)
@@ -128,7 +135,9 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, log
 			"offset": entry.Placeholder.Offset,
 			"length": entry.Placeholder.Length,
 		})
-		kwargsByMod[mod] = append(kwargsByMod[mod], kwargsSentinel(entry.KwargsData))
+		if includeKwargs {
+			kwargsByMod[mod] = append(kwargsByMod[mod], kwargsSentinel(entry.KwargsData))
+		}
 	}
 	features := map[string]any{
 		"mm_hashes":       hashesByMod,
