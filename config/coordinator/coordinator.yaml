@@ -125,9 +125,11 @@ pipeline:
         # BEFORE any download happens. Cheapest admission gate, and the only
         # thing bounding how many bytes one request can pull into memory --
         # see max_download_size for why raising any per-modality cap means
-        # setting this one too.
-        # 0 (or omitted) = unlimited.
-        # max_multimodal_entries: 8
+        # raising this one too.
+        #
+        # 0 (or omitted) = unlimited, which lets a request body of a few KB
+        # name hundreds of URLs and turn each one into a download. Set it.
+        max_multimodal_entries: 8
 
         # max_download_size caps the megabytes read per media download. A response
         # whose Content-Length or body exceeds the cap is rejected as a client
@@ -152,12 +154,10 @@ pipeline:
         # to the encode step's max_parallel). Size the memory limit for several
         # times the number above, not for the number itself.
         #
-        # That makes max_multimodal_entries the limit that actually bounds this,
-        # and it is unlimited by default. 8 parts x 10 MB is ~110 MB in this step;
-        # 8 parts at max_video_download_size: 200 is ~2.2 GB in this step and
-        # multiples of that across the pipeline; the same request with
-        # max_multimodal_entries unset is unbounded -- a request body of a few KB
-        # can name hundreds of URLs. Raise a per-modality cap below only together
+        # That makes max_multimodal_entries the limit that actually bounds this.
+        # 8 parts x 10 MB is ~110 MB in this step; 8 parts at
+        # max_video_download_size: 200 is ~2.2 GB in this step and multiples of
+        # that across the pipeline. Raise a per-modality cap below only together
         # with max_multimodal_entries.
         #
         # This value is the global default; each modality below may override
@@ -232,6 +232,18 @@ pipeline:
         # image, the download path is checked whether or not this param is set.
         # Default: audio/wav, audio/x-wav, audio/mpeg, audio/mp3, audio/flac,
         # audio/x-flac, audio/ogg, audio/opus, audio/webm.
+        #
+        # An input_audio part names a format, not a MIME type, and the two are
+        # matched through one canonical MIME per format:
+        #
+        #   wav -> audio/wav      mp3  -> audio/mpeg   flac -> audio/flac
+        #   opus -> audio/opus    ogg  -> audio/ogg    webm -> audio/webm
+        #
+        # List the canonical type when narrowing this param, or input_audio
+        # parts of that format are rejected. audio/mp3 alone does not admit
+        # format "mp3"; audio/mpeg does. The aliases in the default list
+        # (audio/x-wav, audio/mp3, audio/x-flac) only ever match a data URI or
+        # a download's Content-Type.
         # allowed_audio_content_types:
         #   - audio/wav
         #   - audio/mpeg

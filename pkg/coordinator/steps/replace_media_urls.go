@@ -447,8 +447,11 @@ func (s *ReplaceMediaURLsStep) validateInlineAudio(ref mediaRef) error {
 			ref.msgIdx, ref.partIdx, err, pipeline.ErrBadRequest)
 	}
 	if !s.allowedContentTypeForModality(contentType, ref.modality) {
-		return fmt.Errorf("input_audio content type %q not allowed at message %d part %d: %w",
-			contentType, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
+		// Name the format alongside the MIME it maps to. The allowlist is
+		// written in MIME types and the request in formats, so an operator
+		// reading the MIME alone cannot tell which format was refused.
+		return fmt.Errorf("input_audio format %q (content type %q) not allowed at message %d part %d: %w",
+			ref.format, contentType, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
 	}
 	// input_audio is capped by the audio modality.
 	if s.inlineSizeExceeded(ref.data, ref.modality) {
@@ -835,6 +838,11 @@ func parseContentTypeSet(raw any, fieldName string) (map[string]struct{}, error)
 // audioFormatMIME maps OpenAI's input_audio.format values to canonical MIME
 // types. "wav" and "mp3" match OpenAI's chat-completions API; the other
 // entries cover formats backends commonly accept.
+//
+// One MIME per format, so an operator narrowing allowed_audio_content_types
+// has to list the canonical type: "mp3" is checked as audio/mpeg, and the
+// audio/mp3 alias in defaultAllowedContentTypesByModality admits only a data
+// URI or a download that declares it.
 var audioFormatMIME = map[string]string{
 	"wav":  "audio/wav",
 	"mp3":  "audio/mpeg",

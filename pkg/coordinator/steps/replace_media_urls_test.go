@@ -2105,6 +2105,59 @@ func TestReplaceMediaURLsStep_InputAudio_OversizedPayload(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_InputAudio_AllowlistUsesCanonicalMIME pins the
+// vocabulary an operator has to write. An input_audio part names a format and
+// the allowlist names MIME types, so "mp3" is checked as audio/mpeg and an
+// allowlist of audio/mp3 alone does not admit it. The rejection has to name
+// the format, or the operator cannot connect it back to the config.
+func TestReplaceMediaURLsStep_InputAudio_AllowlistUsesCanonicalMIME(t *testing.T) {
+	mp3Part := func() map[string]any {
+		return map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":        "input_audio",
+							"input_audio": map[string]any{"data": "AAAA", "format": "mp3"},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("alias_alone_rejects", func(t *testing.T) {
+		step := newLoopbackStep(t, map[string]any{
+			"download_timeout":            "5s",
+			"allowed_audio_content_types": []any{"audio/mp3"},
+		})
+		err := step.Execute(context.Background(), &pipeline.RequestContext{Body: mp3Part()})
+		if err == nil {
+			t.Fatal("expected mp3 to be rejected when only audio/mp3 is allowed")
+		}
+		if !errors.Is(err, pipeline.ErrBadRequest) {
+			t.Fatalf("expected ErrBadRequest, got %v", err)
+		}
+		if !strings.Contains(err.Error(), `"mp3"`) {
+			t.Errorf("error should name the format, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "audio/mpeg") {
+			t.Errorf("error should name the MIME the format maps to, got %v", err)
+		}
+	})
+
+	t.Run("canonical_type_accepts", func(t *testing.T) {
+		step := newLoopbackStep(t, map[string]any{
+			"download_timeout":            "5s",
+			"allowed_audio_content_types": []any{"audio/mpeg"},
+		})
+		if err := step.Execute(context.Background(), &pipeline.RequestContext{Body: mp3Part()}); err != nil {
+			t.Fatalf("expected mp3 accepted when audio/mpeg is allowed, got %v", err)
+		}
+	})
+}
+
 // TestReplaceMediaURLsStep_InputAudio_RejectedBeforeDownloads puts a bad
 // input_audio LAST in walker order, behind an audio_url that would
 // otherwise be downloaded. The inline checks are local, so they must all
