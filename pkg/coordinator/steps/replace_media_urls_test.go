@@ -1726,6 +1726,51 @@ func TestReplaceMediaURLsStep_InputAudio_OversizedPayload(t *testing.T) {
 	}
 }
 
+// TestReplaceMediaURLsStep_InputAudio_RejectedBeforeDownloads puts a bad
+// input_audio LAST in walker order, behind an audio_url that would
+// otherwise be downloaded. The inline checks are local, so they must all
+// run before any download starts; otherwise a request that is going to be
+// rejected anyway still pays for the bytes. The server counter is the
+// assertion: it must never be hit.
+func TestReplaceMediaURLsStep_InputAudio_RejectedBeforeDownloads(t *testing.T) {
+	var hits atomic.Int32
+	audioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", testAudioWAVMIME)
+		_, _ = w.Write([]byte("wav-bytes"))
+	}))
+	defer audioServer.Close()
+
+	step := newLoopbackStep(t, map[string]any{"download_timeout": "5s"})
+	reqCtx := &pipeline.RequestContext{
+		Body: map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{
+							"type":      "audio_url",
+							"audio_url": map[string]any{"url": audioServer.URL + "/clip.wav"},
+						},
+						map[string]any{
+							"type":        "input_audio",
+							"input_audio": map[string]any{"data": "AAAA", "format": "aiff"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := step.Execute(context.Background(), reqCtx)
+	if err == nil || !errors.Is(err, pipeline.ErrBadRequest) {
+		t.Fatalf("expected unsupported input_audio format rejected, got %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("expected no download before inline validation rejected the request, got %d request(s)", got)
+	}
+}
+
 // TestReplaceMediaURLsStep_MixedImageAudioVideo runs one request with
 // one image URL, one audio URL, and one video URL. All three are
 // inlined as data URIs and added to MultimodalEntries in walker order,

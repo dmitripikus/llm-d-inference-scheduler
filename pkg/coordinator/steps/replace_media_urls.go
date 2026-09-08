@@ -302,6 +302,22 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		return fmt.Errorf("too many multimodal entries: got %d, max %d: %w", len(refs), s.maxMultimodalEntries, pipeline.ErrBadRequest)
 	}
 
+	// Validate every inline input_audio ref before a single download starts.
+	// These checks are local (format name, MIME allowlist, payload length),
+	// so running them first means a request that is going to be rejected
+	// anyway does not first pull megabytes over the network for its
+	// audio_url / video_url refs. Doing this inside the download loop below
+	// would not help: an inline ref late in walker order would still land
+	// after earlier downloads had been kicked off.
+	for _, ref := range refs {
+		if !ref.isInline {
+			continue
+		}
+		if err := s.validateInlineAudio(ref); err != nil {
+			return err
+		}
+	}
+
 	// Cancel any in-flight downloads when Execute returns early (cancelled
 	// context or a rejected data URI), so goroutines do not outlive the step.
 	ctx, cancel := context.WithCancel(ctx)
@@ -312,8 +328,8 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 
 	// results parallels refs: results[i] is the outcome of processing
 	// refs[i]. URL refs may be filled synchronously (data URI) or by a
-	// download goroutine; inline refs are validated in the walker-order
-	// append pass after g.Wait.
+	// download goroutine; inline refs use no result slot, they were
+	// validated above and their payload is already in the body.
 	results := make([]mediaResult, len(refs))
 	urlCount := 0
 	for i, ref := range refs {
@@ -321,8 +337,6 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 			break
 		}
 		if ref.isInline {
-			// Skip inline refs here; they are validated in the walker-order
-			// pass below along with the download results.
 			continue
 		}
 		urlCount++
@@ -370,31 +384,13 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 	}
 
 	// Walk refs in the order they appeared in the request: rewrite URL
-	// slots in place, validate inline refs, and add one MultimodalEntry
-	// per ref.
+	// slots in place and add one MultimodalEntry per ref. Entry order is
+	// the whole point of this pass; see mediaPartIsWellFormed.
 	for i, ref := range refs {
 		if ref.isInline {
-			contentType, err := audioFormatToMIME(ref.format)
-			if err != nil {
-				return fmt.Errorf("input_audio at message %d part %d: %w: %w",
-					ref.msgIdx, ref.partIdx, err, pipeline.ErrBadRequest)
-			}
-			if !s.allowedContentTypeForModality(contentType, ref.modality) {
-				return fmt.Errorf("input_audio content type %q not allowed at message %d part %d: %w",
-					contentType, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
-			}
-			// Padded base64 for n bytes has length 4 * ceil(n/3). Compute
-			// the cap and reject when the string alone exceeds it, so an
-			// oversized payload is caught before decoding. input_audio size
-			// is bounded by the audio-modality cap.
-			sizeCap := s.downloadSizeFor(ref.modality)
-			maxBase64Len := 4 * ((sizeCap + 2) / 3)
-			if int64(len(ref.data)) > maxBase64Len {
-				return fmt.Errorf("input_audio at message %d part %d exceeds size limit: %w",
-					ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
-			}
-			// The inline "data" field already carries the base64 payload
-			// the backend needs, so the body passes through unmodified.
+			// Already validated before the downloads started, and the inline
+			// "data" field already carries the base64 payload the backend
+			// needs, so the body passes through unmodified.
 			appendMultimodalEntry(reqCtx, ref.modality)
 			continue
 		}
@@ -405,6 +401,34 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		appendMultimodalEntry(reqCtx, ref.modality)
 	}
 
+	return nil
+}
+
+// validateInlineAudio checks one input_audio ref: its format must be a
+// recognized audio codec name, the MIME that maps to must pass the audio
+// allowlist, and its payload must fit the audio size cap. Nothing here
+// touches the network or the request body, so Execute runs it on every
+// inline ref before starting any download.
+func (s *ReplaceMediaURLsStep) validateInlineAudio(ref mediaRef) error {
+	contentType, err := audioFormatToMIME(ref.format)
+	if err != nil {
+		return fmt.Errorf("input_audio at message %d part %d: %w: %w",
+			ref.msgIdx, ref.partIdx, err, pipeline.ErrBadRequest)
+	}
+	if !s.allowedContentTypeForModality(contentType, ref.modality) {
+		return fmt.Errorf("input_audio content type %q not allowed at message %d part %d: %w",
+			contentType, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
+	}
+	// Padded base64 for n bytes has length 4 * ceil(n/3). Compute the cap
+	// and reject when the string alone exceeds it, so an oversized payload
+	// is caught before decoding. input_audio size is bounded by the
+	// audio-modality cap.
+	sizeCap := s.downloadSizeFor(ref.modality)
+	maxBase64Len := 4 * ((sizeCap + 2) / 3)
+	if int64(len(ref.data)) > maxBase64Len {
+		return fmt.Errorf("input_audio at message %d part %d exceeds size limit: %w",
+			ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
+	}
 	return nil
 }
 
