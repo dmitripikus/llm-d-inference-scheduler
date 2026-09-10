@@ -73,10 +73,9 @@ var partTypeModality = map[string]string{
 // can log it. partType must already be known to be a media type; modality is
 // the one partTypeModality maps it to.
 //
-// This is the one definition of the well-formedness rule.
-// mediaPartIsWellFormed wraps it for walkers that need only the yes/no answer,
-// so every walker accepts and rejects exactly the same parts. See
-// mediaPartIsWellFormed for why that has to hold.
+// mediaPartIsWellFormed wraps this function for callers that need only the
+// yes/no answer, so every walker accepts and rejects the same parts.
+// mediaPartIsWellFormed records why that has to hold.
 func classifyMediaPart(partMap map[string]any, partType, modality string) (ref mediaRef, ok bool, reason string) {
 	inner, isObject := partMap[partType].(map[string]any)
 	if !isObject {
@@ -112,8 +111,6 @@ func classifyMediaPart(partMap map[string]any, partType, modality string) (ref m
 // wrong entry. That is why this delegates to classifyMediaPart rather
 // than restating the rule: replace_media_urls, which fixes the order,
 // runs the same code as the walkers that follow it.
-//
-// Other files point back to this comment instead of repeating it.
 func mediaPartIsWellFormed(partMap map[string]any, partType string) bool {
 	_, ok, _ := classifyMediaPart(partMap, partType, partTypeModality[partType])
 	return ok
@@ -475,11 +472,11 @@ func (s *ReplaceMediaURLsStep) inlineSizeExceeded(b64, modality string) bool {
 // URI in a URL slot, whose bytes arrive in the request body instead of over
 // the network.
 //
-// Audio and video are enforced. The caps bound what a single request holds in
-// memory, and a 200 MB clip costs the same whether it was downloaded or pasted
-// into the body. Enforcing here also keeps the two ways of sending the same
-// audio in agreement, since input_audio is only ever inline and is capped by
-// validateInlineAudio.
+// Audio and video are enforced so the per-modality cap holds however the
+// payload arrived. coordinator.yaml's max_download_size comment records the
+// memory bound these caps set. input_audio is only ever inline and is capped by
+// validateInlineAudio, so enforcing here keeps the two ways of sending the same
+// audio in agreement.
 //
 // Images are exempt, on the same grounds as their exemption from the
 // download-path Content-Type check in enforceDownloadContentType.
@@ -670,16 +667,13 @@ func (s *ReplaceMediaURLsStep) allowedContentTypeForModality(contentType, modali
 // applied to the Content-Type an HTTP origin returned. Data URIs are always
 // checked; this governs the download path only.
 //
-// Audio and video are always enforced: their decoders carry more CVEs than
-// image decoders (see coordinator.yaml max_audio_download_size), so pinning
-// the container type before the bytes reach a backend is worth the strictness.
+// Audio and video are always enforced, for the reason recorded on
+// coordinator.yaml's max_audio_download_size.
 //
 // Images are enforced only when the operator set allowed_image_content_types
-// explicitly. Enforcing the built-in default here would reject the many
-// origins that serve a valid image as application/octet-stream or with no
-// Content-Type at all (which lands on defaultContentType). An explicit
-// allowlist reads as a deliberate lockdown, so it applies to downloads as well
-// as data URIs.
+// explicitly. coordinator.yaml's comment on that param records why leaving it
+// unset leaves image downloads unchecked. An origin that sends no Content-Type
+// at all lands on defaultContentType.
 func (s *ReplaceMediaURLsStep) enforceDownloadContentType(modality string) bool {
 	if modality != ModalityImage {
 		return true
@@ -689,9 +683,9 @@ func (s *ReplaceMediaURLsStep) enforceDownloadContentType(modality string) bool 
 }
 
 // downloadSizeFor returns the per-modality cap when the operator set one, else
-// the global default. It is the single source of the byte bound, for HTTP
-// downloads and for inline payloads alike; coordinator.yaml's max_download_size
-// comment records which payloads each modality's cap reaches.
+// the global default. Every byte bound in this step resolves through it;
+// coordinator.yaml's max_download_size comment records which payloads each
+// modality's cap reaches.
 func (s *ReplaceMediaURLsStep) downloadSizeFor(modality string) int64 {
 	if v, ok := s.maxDownloadSizeByMod[modality]; ok {
 		return v
@@ -831,13 +825,11 @@ func parseContentTypeSet(raw any, fieldName string) (map[string]struct{}, error)
 }
 
 // audioFormatMIME maps OpenAI's input_audio.format values to canonical MIME
-// types. "wav" and "mp3" match OpenAI's chat-completions API; the other
-// entries cover formats backends commonly accept.
-//
-// One MIME per format, so an operator narrowing allowed_audio_content_types
-// has to list the canonical type: "mp3" is checked as audio/mpeg, and the
-// audio/mp3 alias in defaultAllowedContentTypesByModality admits only a data
-// URI or a download that declares it.
+// types, one per format, for the allowlist check validateInlineAudio runs.
+// "wav" and "mp3" match OpenAI's chat-completions API; the other entries cover
+// formats backends commonly accept. coordinator.yaml's
+// allowed_audio_content_types comment records what one MIME per format means
+// for an operator narrowing that list.
 var audioFormatMIME = map[string]string{
 	"wav":  "audio/wav",
 	"mp3":  "audio/mpeg",

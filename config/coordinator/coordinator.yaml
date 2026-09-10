@@ -175,24 +175,20 @@ pipeline:
         # decode, so an oversized item is rejected without being allocated.
         # max_download_size: 10
 
-        # max_image_download_size overrides max_download_size specifically for
-        # image_url items. Same units (MB), same overflow validation. Applies
-        # to http(s) downloads only; see max_download_size for which payloads
-        # each modality's cap covers.
+        # max_image_download_size overrides max_download_size for image_url
+        # items. Same units (MB), same overflow validation.
         # max_image_download_size: 10
 
         # max_audio_download_size overrides max_download_size for audio_url
-        # items, including audio_url data: URIs, and for input_audio inline
-        # payloads. Audio codec decoders historically carry more CVEs than
-        # image decoders; keep this cap tight until your security team has
-        # reviewed the audio decode path end-to-end.
+        # items. Audio codec decoders historically carry more CVEs than image
+        # decoders; keep this cap tight until your security team has reviewed
+        # the audio decode path end-to-end.
         # max_audio_download_size: 60
 
         # max_video_download_size overrides max_download_size for video_url
-        # items, including video_url data: URIs. Videos routinely need 100+ MB
-        # per clip; leave commented out only if your deployment truly does not
-        # accept video. See max_audio_download_size for the codec-CVE caveat
-        # that also applies here.
+        # items. Videos routinely need 100+ MB per clip; leave commented out
+        # only if your deployment truly does not accept video. The codec-CVE
+        # caveat on max_audio_download_size applies here too.
         # max_video_download_size: 200
 
         # allowed_{image,audio,video}_content_types below each REPLACE the
@@ -231,15 +227,12 @@ pipeline:
         # Default: audio/wav, audio/x-wav, audio/mpeg, audio/mp3, audio/flac,
         # audio/x-flac, audio/ogg, audio/opus, audio/webm.
         #
-        # An input_audio part names a format, not a MIME type, and the two are
-        # matched through one canonical MIME per format:
-        #
-        #   wav -> audio/wav      mp3  -> audio/mpeg   flac -> audio/flac
-        #   opus -> audio/opus    ogg  -> audio/ogg    webm -> audio/webm
-        #
-        # List the canonical type when narrowing this param, or input_audio
-        # parts of that format are rejected. audio/mp3 alone does not admit
-        # format "mp3"; audio/mpeg does. The aliases in the default list
+        # An input_audio part carries a format name. Each format is checked
+        # against one canonical MIME type; audioFormatMIME in
+        # pkg/coordinator/steps/replace_media_urls.go lists the pairs.
+        # Narrowing this param to a list that omits a format's canonical type
+        # rejects input_audio parts of that format: audio/mp3 alone does not
+        # admit format "mp3"; audio/mpeg does. The aliases in the default list
         # (audio/x-wav, audio/mp3, audio/x-flac) only ever match a data URI or
         # a download's Content-Type.
         # allowed_audio_content_types:
