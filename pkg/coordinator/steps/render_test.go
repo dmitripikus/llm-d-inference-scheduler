@@ -24,6 +24,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -188,6 +189,155 @@ func TestRenderStep_ChatCompletions_MultipleModalities(t *testing.T) {
 			t.Errorf("entry %d = %+v, want hash=%q kwargs=%q modality=%q offset=%d length=%d",
 				i, got, w.hash, w.kwargs, w.modality, w.offset, w.length)
 		}
+	}
+}
+
+// TestRenderStep_ChatCompletions_RejectsWrongModalitySplit covers the two
+// response checks on this path, and the difference between them.
+//
+// The aggregate check sums every per-modality slice and compares the total to
+// the entry count, so it catches a response that returns the wrong number of
+// items overall. It cannot see a response that returns the right number sorted
+// into the wrong modalities: the per-entry guard is what catches that, by
+// requiring each entry to find a slot in its own modality's slice.
+//
+// Every case but the last keeps all three totals equal to the entry count, so
+// only the per-entry guard can reject them. They misfile a different field each,
+// because that guard tests mm_hashes, mm_placeholders, and kwargs_data
+// separately and one misfiled field would otherwise leave two clauses unrun.
+//
+// The short_modality_slice case is the one that pins the comparison itself. In
+// the other cases the entry's modality is absent from the response, so a slice
+// length of zero is enough to reject them, and a guard weakened to check only
+// for an empty slice would still pass. There the slice exists and is one item
+// short, which is the shape a weakened guard would answer by handing the entry
+// the previous entry's hash instead of failing.
+//
+// A malformed render response is the service's fault, not the caller's, so
+// these are plain errors rather than ErrBadRequest and surface as 5xx.
+func TestRenderStep_ChatCompletions_RejectsWrongModalitySplit(t *testing.T) {
+	placeholder := func(offset, length int) any {
+		return map[string]any{"offset": offset, "length": length}
+	}
+	imageAudio := []pipeline.MultimodalEntry{{Modality: ModalityImage}, {Modality: ModalityAudio}}
+
+	for _, tc := range []struct {
+		name     string
+		entries  []pipeline.MultimodalEntry
+		features map[string]any
+		wantMsg  string
+	}{
+		{
+			// Both hashes tagged audio. Totals are 2, so the aggregate check
+			// passes, but the image entry finds an absent (nil) image slice.
+			name:    "hashes_under_wrong_modality",
+			entries: imageAudio,
+			features: map[string]any{
+				"mm_hashes":       map[string][]string{ModalityAudio: {"aud-hash", "img-hash"}},
+				"mm_placeholders": map[string][]any{ModalityAudio: {placeholder(1, 3), placeholder(4, 2)}},
+				"kwargs_data":     map[string][]string{ModalityAudio: {"YXVk", "aW1n"}},
+			},
+			wantMsg: ModalityImage,
+		},
+		{
+			// Two image entries but one image hash, and the audio slice absorbs
+			// the extra. Totals are 3, and the image slice is present and one
+			// short, so rejecting requires comparing idx against its length.
+			name: "short_modality_slice",
+			entries: []pipeline.MultimodalEntry{
+				{Modality: ModalityImage}, {Modality: ModalityImage}, {Modality: ModalityAudio},
+			},
+			features: map[string]any{
+				"mm_hashes": map[string][]string{
+					ModalityImage: {"img-hash"},
+					ModalityAudio: {"aud-hash", "extra-hash"},
+				},
+				"mm_placeholders": map[string][]any{
+					ModalityImage: {placeholder(1, 3)},
+					ModalityAudio: {placeholder(4, 2), placeholder(6, 2)},
+				},
+				"kwargs_data": map[string][]string{
+					ModalityImage: {"aW1n"},
+					ModalityAudio: {"YXVk", "ZXh0"},
+				},
+			},
+			wantMsg: ModalityImage,
+		},
+		{
+			// Hashes and placeholders split correctly; kwargs_data puts both
+			// items under image, so the audio entry runs out on kwargs alone.
+			name:    "kwargs_split_disagrees",
+			entries: imageAudio,
+			features: map[string]any{
+				"mm_hashes": map[string][]string{
+					ModalityImage: {"img-hash"},
+					ModalityAudio: {"aud-hash"},
+				},
+				"mm_placeholders": map[string][]any{
+					ModalityImage: {placeholder(1, 3)},
+					ModalityAudio: {placeholder(4, 2)},
+				},
+				"kwargs_data": map[string][]string{ModalityImage: {"aW1n", "YXVk"}},
+			},
+			wantMsg: ModalityAudio,
+		},
+		{
+			// Three hashes for two entries: the aggregate check rejects this
+			// before the per-entry walk starts.
+			name:    "total_count_mismatch",
+			entries: imageAudio,
+			features: map[string]any{
+				"mm_hashes": map[string][]string{
+					ModalityImage: {"img-hash", "extra-hash"},
+					ModalityAudio: {"aud-hash"},
+				},
+				"mm_placeholders": map[string][]any{
+					ModalityImage: {placeholder(1, 3)},
+					ModalityAudio: {placeholder(4, 2)},
+				},
+				"kwargs_data": map[string][]string{
+					ModalityImage: {"aW1n"},
+					ModalityAudio: {"YXVk"},
+				},
+			},
+			wantMsg: "mm_hashes",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"token_ids": []int{1, 32000, 32000, 32000, 51000, 51000},
+					"features":  tc.features,
+				})
+			}))
+			defer server.Close()
+
+			step, err := NewRenderStep(nil, map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			step.(*RenderStep).SetServiceAddress(server.URL)
+
+			reqCtx := &pipeline.RequestContext{
+				OriginalPath: gateway.PathChatCompletions,
+				Body:         map[string]any{"model": "test-model", "messages": []any{}},
+				Model:        "test-model",
+				// Cloned: Execute fills entries in place as it walks, and the
+				// two-entry fixture is shared between cases.
+				MultimodalEntries: slices.Clone(tc.entries),
+			}
+
+			err = step.Execute(context.Background(), reqCtx)
+			if err == nil {
+				t.Fatalf("expected an error, got entries %+v", reqCtx.MultimodalEntries)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error %q should name %q", err, tc.wantMsg)
+			}
+			if errors.Is(err, pipeline.ErrBadRequest) {
+				t.Errorf("a malformed render response is not a client error, got %v", err)
+			}
+		})
 	}
 }
 
