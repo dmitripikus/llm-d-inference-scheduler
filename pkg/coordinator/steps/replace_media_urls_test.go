@@ -198,9 +198,13 @@ func TestReplaceMediaURLsStep_DataURIInput(t *testing.T) {
 }
 
 // TestReplaceMediaURLsStep_UppercaseDataURIScheme covers an uppercase
-// data: scheme, which RFC 2397 allows. It must be recognized as inline
+// data: scheme, which RFC 3986 allows. It must be recognized as inline
 // data and left alone. A case-sensitive prefix check would send it to the
-// download path, where the scheme guard rejects "DATA" outright.
+// download path, where the scheme guard rejects it for not being http(s).
+//
+// The url is asserted unchanged, casing included: the step does not rewrite an
+// inline payload, and vLLM lowercases the scheme through urlparse before
+// matching it, so the client's casing reaches the backend and still parses.
 func TestReplaceMediaURLsStep_UppercaseDataURIScheme(t *testing.T) {
 	step, _ := NewReplaceMediaURLsStep(nil, map[string]any{})
 

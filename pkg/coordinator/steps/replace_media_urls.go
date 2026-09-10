@@ -141,15 +141,18 @@ func normalizeMediaType(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-// dataURIPrefix is the scheme prefix of a data URI. RFC 2397 scheme names
-// are case-insensitive, so every comparison against it goes through
-// isDataURI rather than strings.HasPrefix.
+// dataURIPrefix is the scheme prefix of a data URI. Scheme names are
+// case-insensitive (RFC 3986 section 3.1), so every comparison against it goes
+// through isDataURI rather than strings.HasPrefix.
 const dataURIPrefix = "data:"
 
 // isDataURI reports whether s carries the data: scheme, ignoring case.
 // A case-sensitive check would send "DATA:image/png;base64,..." down the
-// download path, where url.Parse reports scheme "DATA" (Go does not
-// normalize it) and the scheme guard rejects the request.
+// download path, where the scheme guard rejects anything that is not http(s).
+//
+// The payload is forwarded with the client's casing intact. That is safe
+// because vLLM resolves the scheme through urlparse, which lowercases it
+// before the comparison exactly as url.Parse does here.
 func isDataURI(s string) bool {
 	return len(s) >= len(dataURIPrefix) && strings.EqualFold(s[:len(dataURIPrefix)], dataURIPrefix)
 }
