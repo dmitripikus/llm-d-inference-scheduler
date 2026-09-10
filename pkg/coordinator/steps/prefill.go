@@ -82,7 +82,11 @@ func (s *PrefillStep) Name() string { return PrefillStepName }
 func (s *PrefillStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContext) error {
 	logger := log.FromContext(ctx).WithName(PrefillStepName)
 
-	features := buildMMFeatures(reqCtx.MultimodalEntries, true, logger)
+	if err := validateEntryModalities(reqCtx.MultimodalEntries); err != nil {
+		return fmt.Errorf("prefill: %w", err)
+	}
+
+	features := buildMMFeatures(reqCtx.MultimodalEntries, true)
 
 	format := resolveFormat(s.useOpenAIFormat, reqCtx.OriginalPath)
 	body, err := s.buildPrefillBody(ctx, reqCtx, features, format)

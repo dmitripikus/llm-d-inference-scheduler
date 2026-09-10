@@ -19,10 +19,10 @@ package steps
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 
-	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
@@ -59,8 +59,12 @@ func (s *ConditionalDecodeStep) Name() string { return ConditionalDecodeStepName
 func (s *ConditionalDecodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContext) error {
 	logger := log.FromContext(ctx).WithName(ConditionalDecodeStepName)
 
+	if err := validateEntryModalities(reqCtx.MultimodalEntries); err != nil {
+		return fmt.Errorf("conditional-decode: %w", err)
+	}
+
 	body := maps.Clone(reqCtx.Body)
-	s.prepareBody(reqCtx, body, logger)
+	s.prepareBody(reqCtx, body)
 
 	logger.V(logutil.DEFAULT).Info("sending request", "path", reqCtx.OriginalPath)
 
@@ -104,7 +108,7 @@ func (s *ConditionalDecodeStep) Execute(ctx context.Context, reqCtx *pipeline.Re
 	return pipeline.ErrPipelineDone
 }
 
-func (s *ConditionalDecodeStep) prepareBody(reqCtx *pipeline.RequestContext, body map[string]any, logger logr.Logger) {
+func (s *ConditionalDecodeStep) prepareBody(reqCtx *pipeline.RequestContext, body map[string]any) {
 	format := resolveFormat(s.useOpenAIFormat, reqCtx.OriginalPath)
 	switch format {
 	case gateway.FormatChatCompletions:
@@ -112,7 +116,7 @@ func (s *ConditionalDecodeStep) prepareBody(reqCtx *pipeline.RequestContext, bod
 			tokens := map[string]any{
 				"token_ids": reqCtx.TokenIDs,
 			}
-			if features := buildMMFeatures(reqCtx.MultimodalEntries, false, logger); features != nil {
+			if features := buildMMFeatures(reqCtx.MultimodalEntries, false); features != nil {
 				tokens["features"] = features
 			}
 			body["tokens"] = tokens

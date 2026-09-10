@@ -124,6 +124,12 @@ func (s *RenderStep) SetServiceAddress(addr string) {
 func (s *RenderStep) Name() string { return RenderStepName }
 
 func (s *RenderStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContext) error {
+	// Entries reaching here were built by replace_media_urls. On the generate
+	// path executeGenerate builds them below, where extractMultimodalEntries
+	// rejects an empty modality key outright.
+	if err := validateEntryModalities(reqCtx.MultimodalEntries); err != nil {
+		return fmt.Errorf("render: %w", err)
+	}
 	if reqCtx.OriginalPath == gateway.DefaultGeneratePath {
 		return s.executeGenerate(ctx, reqCtx)
 	}
@@ -298,7 +304,7 @@ func (s *RenderStep) executeChatCompletions(ctx context.Context, reqCtx *pipelin
 	// 2... and each entry pairs with the response slot at that position.
 	modIndex := make(map[string]int)
 	for i := range reqCtx.MultimodalEntries {
-		mod := entryModality(reqCtx.MultimodalEntries[i], logger)
+		mod := reqCtx.MultimodalEntries[i].Modality
 		idx := modIndex[mod]
 		modIndex[mod]++
 		hashes := renderResp.Features.MMHashes[mod]

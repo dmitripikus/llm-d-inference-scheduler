@@ -18,7 +18,6 @@ package steps
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -114,7 +113,7 @@ func capSingleTokenOutput(body map[string]any, format gateway.RequestFormat) {
 // and optionally kwargs_data) from the request's multimodal entries. It returns
 // nil when there are no entries. Entries are grouped by Modality so a
 // mixed-modality request produces one key per modality in each feature map.
-func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, logger logr.Logger) map[string]any {
+func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool) map[string]any {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -129,7 +128,7 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, log
 		kwargsByMod = make(map[string][]any)
 	}
 	for _, entry := range entries {
-		mod := entryModality(entry, logger)
+		mod := entry.Modality
 		hashesByMod[mod] = append(hashesByMod[mod], entry.Hash)
 		placeholdersByMod[mod] = append(placeholdersByMod[mod], map[string]any{
 			"offset": entry.Placeholder.Offset,
@@ -149,29 +148,29 @@ func buildMMFeatures(entries []pipeline.MultimodalEntry, includeKwargs bool, log
 	return features
 }
 
-// errEmptyModality marks a MultimodalEntry that reached a reader with no
-// Modality set. Both production producers (replace_media_urls,
-// extractMultimodalEntries) always set the field, so this is a coordinator
-// bug rather than anything a client can cause.
-var errEmptyModality = errors.New("MultimodalEntry has empty Modality, defaulting to image")
-
-// entryModality returns the entry's Modality with an empty-string fallback
-// to ModalityImage, so a caller that built an entry without setting the
-// field does not produce a "" modality key.
+// validateEntryModalities rejects a MultimodalEntry with no Modality. Steps
+// that read entries call it before doing so.
 //
-// The fallback carries a cost: it groups the entry under image everywhere
-// (mm_hashes, the encode fanout, render's per-modality slots), so a
-// wrongly tagged entry pairs with the wrong part and the failure surfaces far
-// from here, as an encoder rejection. Log through logger.Error, which is
-// emitted at any verbosity, so an occurrence is visible in production
-// rather than only under debug logging.
-func entryModality(entry pipeline.MultimodalEntry, logger logr.Logger) string {
-	if entry.Modality == "" {
-		logger.Error(errEmptyModality, "unexpected multimodal entry",
-			"hash", entry.Hash)
-		return ModalityImage
+// Both producers set the field: replace_media_urls stamps it from
+// partTypeModality, and extractMultimodalEntries rejects an empty modality key
+// as a client error. Reaching here therefore means a coordinator bug, so the
+// error is deliberately not ErrBadRequest: a request that gets this far should
+// surface as a 5xx rather than blame the caller.
+//
+// Failing is what keeps a mislabeled entry from corrupting a response. Every
+// reader keys per-modality pairing on this field (mm_hashes, the encode fanout,
+// decode's uuid tagging, render's per-modality slots). An entry that resolved to
+// some default modality instead would be spliced into that modality's index
+// sequence at each of those sites, pairing with another entry's part or response
+// slot and shifting the local index of every later entry sharing the label. The
+// request would complete and return a response built on a guess.
+func validateEntryModalities(entries []pipeline.MultimodalEntry) error {
+	for i, entry := range entries {
+		if entry.Modality == "" {
+			return fmt.Errorf("multimodal entry %d has no modality (hash %q)", i, entry.Hash)
+		}
 	}
-	return entry.Modality
+	return nil
 }
 
 // kwargsSentinel implements the JSON-null "resolve from cache" convention for
@@ -325,6 +324,12 @@ func mmModalityArray(features map[string]any, field, modality string) (arr []any
 // order. Returns (nil, nil) when features[field] is absent or an empty
 // object, (nil, ErrBadRequest) when features[field] is present but not an
 // object (fail-loud on malformed responses).
+//
+// An empty key is rejected rather than carried. The key becomes
+// MultimodalEntry.Modality, which every reader uses as the map key for
+// positional per-modality pairing, and this is the boundary where a
+// client-supplied features map turns into entries. validateEntryModalities
+// states what an entry with no modality would cost downstream.
 func modalitiesInFeatures(features map[string]any, field string) ([]string, error) {
 	raw, ok := features[field]
 	if !ok || raw == nil {
@@ -338,6 +343,9 @@ func modalitiesInFeatures(features map[string]any, field string) ([]string, erro
 	for k, v := range m {
 		if v == nil {
 			continue
+		}
+		if k == "" {
+			return nil, fmt.Errorf("%s has an empty modality key: %w", field, pipeline.ErrBadRequest)
 		}
 		out = append(out, k)
 	}

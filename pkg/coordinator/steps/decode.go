@@ -70,6 +70,10 @@ func (s *DecodeStep) Name() string { return DecodeStepName }
 func (s *DecodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContext) error {
 	logger := log.FromContext(ctx).WithName(DecodeStepName)
 
+	if err := validateEntryModalities(reqCtx.MultimodalEntries); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+
 	s.prepareDecodeBody(ctx, reqCtx)
 
 	logger.V(logutil.DEFAULT).Info("sending request", "path", reqCtx.OriginalPath, "stream", reqCtx.Stream)
@@ -106,7 +110,7 @@ func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.Req
 	switch format {
 	case gateway.FormatChatCompletions:
 		reqCtx.Body[reqcommon.FieldKVTransferParams] = kvParams
-		s.injectTokensField(reqCtx, logger)
+		s.injectTokensField(reqCtx)
 	case gateway.FormatCompletions:
 		reqCtx.Body[reqcommon.FieldKVTransferParams] = kvParams
 		if len(reqCtx.TokenIDs) > 0 {
@@ -126,11 +130,11 @@ func (s *DecodeStep) prepareDecodeBody(ctx context.Context, reqCtx *pipeline.Req
 	}
 }
 
-func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext, logger logr.Logger) {
+func (s *DecodeStep) injectTokensField(reqCtx *pipeline.RequestContext) {
 	tokens := map[string]any{
 		"token_ids": reqCtx.TokenIDs,
 	}
-	if features := buildMMFeatures(reqCtx.MultimodalEntries, false, logger); features != nil {
+	if features := buildMMFeatures(reqCtx.MultimodalEntries, false); features != nil {
 		tokens["features"] = features
 	}
 	reqCtx.Body["tokens"] = tokens
@@ -151,8 +155,7 @@ func (s *DecodeStep) injectUUIDs(reqCtx *pipeline.RequestContext, logger logr.Lo
 	// O(1) lookup per part. Build is O(n).
 	hashesByMod := make(map[string][]string)
 	for _, entry := range reqCtx.MultimodalEntries {
-		mod := entryModality(entry, logger)
-		hashesByMod[mod] = append(hashesByMod[mod], entry.Hash)
+		hashesByMod[entry.Modality] = append(hashesByMod[entry.Modality], entry.Hash)
 	}
 
 	modCounter := make(map[string]int)

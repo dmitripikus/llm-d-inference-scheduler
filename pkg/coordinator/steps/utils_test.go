@@ -23,8 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-logr/logr"
-
 	"github.com/llm-d/llm-d-router/pkg/coordinator/gateway"
 	"github.com/llm-d/llm-d-router/pkg/coordinator/pipeline"
 )
@@ -583,7 +581,7 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 	}
 
 	t.Run("all cache-hit -> all null", func(t *testing.T) {
-		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(""), entry("")}, true, logr.Discard())
+		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(""), entry("")}, true)
 		items := mmImageKwargs(t, features)
 		if len(items) != 2 {
 			t.Fatalf("expected 2 kwargs_data entries, got %d: %v", len(items), items)
@@ -601,7 +599,7 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 	})
 
 	t.Run("mixed batch keeps inline, nulls cache hits", func(t *testing.T) {
-		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(testKwargs), entry("")}, true, logr.Discard())
+		features := buildMMFeatures([]pipeline.MultimodalEntry{entry(testKwargs), entry("")}, true)
 		items := mmImageKwargs(t, features)
 		if len(items) != 2 || items[0] != testKwargs || items[1] != nil {
 			t.Fatalf("expected [\"dGVuc29y\", null], got %#v", items)
@@ -609,7 +607,7 @@ func TestBuildMMFeatures_CacheHitSentinelSerializesAsNull(t *testing.T) {
 	})
 
 	t.Run("includeKwargs=false omits the field", func(t *testing.T) {
-		features := buildMMFeatures([]pipeline.MultimodalEntry{entry("")}, false, logr.Discard())
+		features := buildMMFeatures([]pipeline.MultimodalEntry{entry("")}, false)
 		if _, ok := features["kwargs_data"]; ok {
 			t.Errorf("expected kwargs_data absent when includeKwargs is false")
 		}
@@ -631,7 +629,7 @@ func TestBuildMMFeatures_GroupsByModality(t *testing.T) {
 		{Modality: ModalityVideo, Hash: "vid-a", KwargsData: "k-vid-a",
 			Placeholder: pipeline.PlaceholderRange{Offset: 10, Length: 5}},
 	}
-	features := buildMMFeatures(entries, true, logr.Discard())
+	features := buildMMFeatures(entries, true)
 
 	hashes, ok := features["mm_hashes"].(map[string][]string)
 	if !ok {
@@ -658,34 +656,36 @@ func TestBuildMMFeatures_GroupsByModality(t *testing.T) {
 	}
 }
 
-// TestEntryModality_EmptyLogsError covers the defensive branch: an entry
-// with no Modality still resolves to image, but the miss is reported via
-// logger.Error so it shows up at production verbosity. Logged at DEBUG it
-// was invisible, and the only symptom was an encoder rejection much later,
-// after the entry had been grouped under the wrong modality.
-func TestEntryModality_EmptyLogsError(t *testing.T) {
-	sink := &logCaptureSink{}
-	entry := pipeline.MultimodalEntry{Hash: "h3"}
+// TestValidateEntryModalities covers the invariant guard the steps run before
+// reading entries. An entry with no Modality is an error rather than a value
+// resolved to some default, because every reader keys per-modality pairing on
+// the field and a defaulted entry would be spliced into another modality's
+// index sequence.
+//
+// The error is deliberately not ErrBadRequest: both producers set the field, so
+// reaching the guard means a coordinator bug, not bad client input.
+func TestValidateEntryModalities(t *testing.T) {
+	entries := []pipeline.MultimodalEntry{
+		{Modality: ModalityImage, Hash: "h1"},
+		{Hash: "h2"},
+	}
+	err := validateEntryModalities(entries)
+	if err == nil {
+		t.Fatal("expected an error for an entry with no modality")
+	}
+	if !strings.Contains(err.Error(), "h2") {
+		t.Errorf("error should name the offending entry, got %v", err)
+	}
+	if errors.Is(err, pipeline.ErrBadRequest) {
+		t.Error("an entry with no modality is a coordinator bug, not ErrBadRequest")
+	}
 
-	if got := entryModality(entry, logr.New(sink)); got != ModalityImage {
-		t.Errorf("entryModality = %q, want %q", got, ModalityImage)
+	entries[1].Modality = ModalityAudio
+	if err := validateEntryModalities(entries); err != nil {
+		t.Errorf("expected no error for fully tagged entries, got %v", err)
 	}
-	if len(sink.errors) != 1 {
-		t.Fatalf("expected 1 error log, got %d (infos: %d)", len(sink.errors), len(sink.infos))
-	}
-	if !errors.Is(sink.errors[0].err, errEmptyModality) {
-		t.Errorf("logged error = %v, want errEmptyModality", sink.errors[0].err)
-	}
-
-	// A populated Modality is the normal path and must stay silent.
-	quiet := &logCaptureSink{}
-	entry.Modality = ModalityAudio
-	if got := entryModality(entry, logr.New(quiet)); got != ModalityAudio {
-		t.Errorf("entryModality = %q, want %q", got, ModalityAudio)
-	}
-	if len(quiet.errors) != 0 || len(quiet.infos) != 0 {
-		t.Errorf("expected no logs for a well-formed entry, got %d errors / %d infos",
-			len(quiet.errors), len(quiet.infos))
+	if err := validateEntryModalities(nil); err != nil {
+		t.Errorf("expected no error for no entries, got %v", err)
 	}
 }
 
@@ -783,6 +783,56 @@ func TestExtractMultimodalEntries_UnhashedModalityRejected(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, err := extractMultimodalEntries(tc.features)
+			if err == nil {
+				t.Fatalf("expected an error, got entries %v", entries)
+			}
+			if !errors.Is(err, pipeline.ErrBadRequest) {
+				t.Fatalf("expected ErrBadRequest, got %v", err)
+			}
+		})
+	}
+}
+
+// TestExtractMultimodalEntries_EmptyModalityKeyRejected covers a features map
+// naming a modality with the empty string. The key becomes
+// MultimodalEntry.Modality, and features is client-supplied on the generate
+// path, so this is the boundary that has to reject it: an entry with no
+// modality reaching a reader would be a coordinator bug, and an accepted empty
+// key would let a client manufacture one.
+//
+// Rejected as a client error, since the request body is what is wrong.
+func TestExtractMultimodalEntries_EmptyModalityKeyRejected(t *testing.T) {
+	placeholder := func(offset, length int) any {
+		return map[string]any{"offset": float64(offset), "length": float64(length)}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		features map[string]any
+	}{
+		{
+			name: "mm_hashes",
+			features: map[string]any{
+				"mm_hashes":       map[string]any{"": []any{"img-a"}},
+				"mm_placeholders": map[string]any{"": []any{placeholder(1, 2)}},
+			},
+		},
+		{
+			name: "alongside_a_named_modality",
+			features: map[string]any{
+				"mm_hashes": map[string]any{
+					ModalityImage: []any{"img-a"},
+					"":            []any{"ghost"},
+				},
+				"mm_placeholders": map[string]any{
+					ModalityImage: []any{placeholder(1, 2)},
+					"":            []any{placeholder(4, 2)},
+				},
+			},
+		},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries, err := extractMultimodalEntries(tc.features)
 			if err == nil {
