@@ -382,15 +382,7 @@ func (s *ReplaceMediaURLsStep) Execute(ctx context.Context, reqCtx *pipeline.Req
 		g.Go(func() error {
 			data, contentType, err := s.download(gCtx, ref.url, ref.modality)
 			if err != nil {
-				return fmt.Errorf("downloading %s: %w", ref.url, err)
-			}
-			// Check the origin's Content-Type against the per-modality
-			// allowlist. Which modalities this covers on the download path
-			// is decided by enforceDownloadContentType; the allowlist always
-			// applies to data URIs regardless.
-			if s.enforceDownloadContentType(ref.modality) && !s.allowedContentTypeForModality(contentType, ref.modality) {
-				return fmt.Errorf("downloaded content type %q not allowed for %s at message %d part %d: %w",
-					contentType, ref.modality, ref.msgIdx, ref.partIdx, pipeline.ErrBadRequest)
+				return fmt.Errorf("downloading %s at message %d part %d: %w", ref.url, ref.msgIdx, ref.partIdx, err)
 			}
 			// Encode to the final data URI here rather than stashing the
 			// base64 for the walker pass below to wrap: holding both the
@@ -542,6 +534,24 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 		return nil, "", upstreamError(ReplaceMediaURLsStepName, resp.StatusCode, respBody)
 	}
 
+	// Normalize before falling back to defaultContentType, so a header that
+	// is only parameters ("; charset=utf-8") lands on the default the same
+	// way an absent header does.
+	contentType := normalizeMediaType(resp.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = defaultContentType
+	}
+
+	// Check the origin's Content-Type against the per-modality allowlist
+	// before reading the body, so a response that cannot be accepted costs
+	// its headers rather than up to sizeCap bytes read and held. Which
+	// modalities this covers on the download path is decided by
+	// enforceDownloadContentType; the allowlist always applies to data URIs
+	// regardless.
+	if s.enforceDownloadContentType(modality) && !s.allowedContentTypeForModality(contentType, modality) {
+		return nil, "", fmt.Errorf("downloaded content type %q not allowed for %s: %w", contentType, modality, pipeline.ErrBadRequest)
+	}
+
 	if resp.ContentLength > sizeCap {
 		return nil, "", fmt.Errorf("response too large: Content-Length %d exceeds max %d: %w", resp.ContentLength, sizeCap, pipeline.ErrBadRequest)
 	}
@@ -552,13 +562,6 @@ func (s *ReplaceMediaURLsStep) download(ctx context.Context, rawURL, modality st
 	}
 	if int64(len(data)) > sizeCap {
 		return nil, "", fmt.Errorf("response too large: body exceeds max %d: %w", sizeCap, pipeline.ErrBadRequest)
-	}
-	// Normalize before falling back to defaultContentType, so a header that
-	// is only parameters ("; charset=utf-8") lands on the default the same
-	// way an absent header does.
-	contentType := normalizeMediaType(resp.Header.Get("Content-Type"))
-	if contentType == "" {
-		contentType = defaultContentType
 	}
 	return data, contentType, nil
 }

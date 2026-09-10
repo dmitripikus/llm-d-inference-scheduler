@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -1635,6 +1636,57 @@ func TestReplaceMediaURLsStep_VideoURL_RejectsUnexpectedContentType(t *testing.T
 	}
 	if !errors.Is(err, pipeline.ErrBadRequest) {
 		t.Fatalf("expected ErrBadRequest, got %v", err)
+	}
+}
+
+// readTrackingBody is a response body that records whether anything read it.
+// Read returns EOF immediately, so a caller that does reach the body gets an
+// empty payload rather than blocking.
+type readTrackingBody struct {
+	read atomic.Bool
+}
+
+func (b *readTrackingBody) Read([]byte) (int, error) {
+	b.read.Store(true)
+	return 0, io.EOF
+}
+
+func (b *readTrackingBody) Close() error { return nil }
+
+// TestReplaceMediaURLsStep_Download_RejectsContentTypeBeforeReadingBody pins the
+// order of the two download-path checks. An audio origin serving a type the
+// allowlist rejects is turned away on its headers, with the body left unread.
+// With the check after the read instead, the request is rejected just the same,
+// but only once up to the modality's cap has crossed the network and been held
+// in memory, which is the cost the cap exists to bound.
+//
+// ContentLength is -1, as it is for a chunked response, so the Content-Length
+// guard does not fire and the ordering is what decides whether the body is read.
+//
+// The assertion is on whether the body was read at all. Elapsed time, or bytes
+// counted inside a test server's handler, would both race with the client
+// closing the connection.
+func TestReplaceMediaURLsStep_Download_RejectsContentTypeBeforeReadingBody(t *testing.T) {
+	body := &readTrackingBody{}
+	step := newLoopbackStep(t, map[string]any{"download_timeout": "5s"})
+	step.client = &http.Client{Transport: roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        http.Header{"Content-Type": []string{"text/html"}},
+			Body:          body,
+			ContentLength: -1,
+		}, nil
+	})}
+
+	_, _, err := step.download(context.Background(), "http://media.invalid/clip.wav", ModalityAudio)
+	if err == nil {
+		t.Fatal("expected error for audio download served as text/html")
+	}
+	if !errors.Is(err, pipeline.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest, got %v", err)
+	}
+	if body.read.Load() {
+		t.Error("response body was read before the Content-Type was rejected")
 	}
 }
 
